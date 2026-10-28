@@ -1,22 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-capability",
-  "description": "Capability for the main window",
+  "description": "Local settings and window navigation",
   "windows": [
-    "*"
+    "main",
+    "switcher"
   ],
   "permissions": [
-    "core:path:default",
     "core:event:default",
     "core:window:default",
     "core:app:default",
-    "core:resources:default",
-    "core:menu:default",
-    "core:tray:default",
-    "core:window:allow-set-title",
-    "core:image:default",
-    "core:webview:default",
-    "process:default",
     "autostart:default"
   ]
 }

@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://alvinfunborn.github.io/screen-buoy/sitemap.xml

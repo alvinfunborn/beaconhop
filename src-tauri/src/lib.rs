@@ -1,374 +1,84 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
-pub mod config;
-pub mod element;
-pub mod hint;
-pub mod input;
-pub mod monitor;
-pub mod utils;
-pub mod window;
-pub mod permissions;
-pub mod updates;
-pub mod language;
+mod codes;
+mod config;
+mod engine;
+mod input;
+mod logger;
 #[cfg(target_os = "macos")]
-pub mod macos_access;
-#[cfg(target_os = "macos")]
-mod macos_window;
-
-#[cfg(target_os = "macos")]
-pub fn set_app_activation_policy_accessory() {
-    macos_window::set_app_activation_policy_accessory();
-}
-
-use config::{get_config_for_frontend, get_hint_types_styles, hint::get_hint_default_style, save_config_for_frontend};
-use hint::show_hints;
-#[cfg(target_os = "windows")]
-use hint::overlay::OVERLAY_HANDLES_STORAGE;
-use log::{error, info, warn};
-use std::{panic, str::FromStr};
+mod macos_access;
+mod model;
+mod platform;
+mod runtime;
 use tauri::{
-    image::Image,
-    menu::{MenuBuilder, MenuItem, MenuItemBuilder},
-    tray::{TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, WindowEvent,
+    menu::{Menu, MenuItem},
+    tray::TrayIconBuilder,
 };
-use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
-#[cfg(target_os = "windows")]
-use windows::Win32::{Foundation::HWND, Graphics::Dwm::DWMWINDOWATTRIBUTE};
-#[cfg(target_os = "windows")]
-use windows::Win32::Graphics::Dwm::DwmSetWindowAttribute;
-#[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowLongW, SetWindowLongW, GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TRANSPARENT,
-};
-
-struct TrayMenuLabels([MenuItem<tauri::Wry>; 3]);
-
-pub fn update_tray_language(app: &AppHandle, preference: &language::LanguagePreference) {
-    if let Some(menu) = app.try_state::<TrayMenuLabels>() {
-        for (item, label) in menu.0.iter().zip(language::tray_labels(preference)) {
-            if let Err(error) = item.set_text(label) {
-                warn!("[language] failed to update tray label: {error}");
-            }
-        }
-    }
-}
-
-pub fn setup_tray(
-    app_handle: &AppHandle,
-    config: &config::Config,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if !config.system.show_tray_icon {
-        info!("[setup_tray] tray icon is not enabled");
-        return Ok(());
-    }
-
-    let [settings, restart, exit] = language::tray_labels(&config.system.language);
-    let exit_item = MenuItemBuilder::with_id("exit", exit).build(app_handle)?;
-    let restart_item = MenuItemBuilder::with_id("restart", restart).build(app_handle)?;
-    let settings_item = MenuItemBuilder::with_id("settings", settings).build(app_handle)?;
-
-    let tray_menu = MenuBuilder::new(app_handle)
-        .item(&settings_item)
-        .item(&restart_item)
-        .item(&exit_item)
-        .build()?;
-
-    #[cfg(target_os = "windows")]
-    let tray_icon = Image::from_bytes(include_bytes!("../icons/icon.ico"))?;
-    #[cfg(target_os = "macos")]
-    let tray_icon = Image::from_bytes(include_bytes!("../icons/tray_icon.png"))?;
-
-    let _tray_icon = TrayIconBuilder::new()
-        .menu(&tray_menu)
-        .on_menu_event(move |tray_handle, event| {
-            let app_handle = tray_handle.app_handle();
-            match event.id.as_ref() {
-                "exit" => {
-                    app_handle.exit(0);
-                }
-                "settings" => {
-                    let window = app_handle.get_webview_window("main").unwrap();
-                    window.show().unwrap();
-                    window.set_focus().unwrap();
-                }
-                "restart" => {
-                    app_handle.restart();
-                }
-                _ => {}
-            }
-        })
-        .icon(tray_icon)
-        .on_tray_icon_event(move |tray_handle, event| {
-            let app_handle = tray_handle.app_handle();
-            match event {
-                TrayIconEvent::DoubleClick { .. } => {
-                    let window = app_handle.get_webview_window("main").unwrap();
-                    window.show().unwrap();
-                    window.set_focus().unwrap();
-                }
-                _ => {}
-            }
-        })
-        .icon_as_template(true)
-        .show_menu_on_left_click(true)
-        .build(app_handle)?;
-    app_handle.manage(TrayMenuLabels([settings_item, restart_item, exit_item]));
-    Ok(())
-}
-
-pub fn setup_shortcut(
-    app_handle: &AppHandle,
-    config: &config::Config,
-    main_window: tauri::WebviewWindow,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let hotkey_buoy = config.keybinding.hotkey_buoy.clone();
-    let main_shortcut: Shortcut = FromStr::from_str(&hotkey_buoy)?;
-    let main_window_clone = main_window.clone();
-
-    info!("[setup_shortcut] main_shortcut: {}", hotkey_buoy);
-    app_handle.plugin(
-        tauri_plugin_global_shortcut::Builder::new()
-            .with_handler(move |_app, shortcut, event| {
-                if shortcut == &main_shortcut {
-                    match event.state() {
-                        ShortcutState::Pressed => {
-                            info!("[setup_shortcut] main shortcut pressed");
-                            let window_clone = main_window_clone.clone();
-                            tauri::async_runtime::spawn(async move {
-                                show_hints(window_clone).await;
-                            });
-                        }
-                        ShortcutState::Released => {}
-                    }
-                }
-            })
-            .build(),
-    )?;
-
-    if let Err(e) = app_handle.global_shortcut().register(main_shortcut) {
-        error!("[✗] 注册快捷键失败: {}", e);
-        return Err(e.into());
-    }
-    Ok(())
-}
-
-pub fn set_auto_start(
-    app_handle: &AppHandle,
-    config: &config::Config,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let auto_start = config.system.start_at_login;
-    let autostart_manager = app_handle.autolaunch();
-    info!("[set_auto_start] auto start: {}", auto_start);
-    if auto_start {
-        let _ = autostart_manager.enable();
-    } else {
-        let _ = autostart_manager.disable();
-    }
-    Ok(())
-}
-
-pub fn setup_panic_handler(app_handle: tauri::AppHandle) {
-    panic::set_hook(Box::new(move |panic_info| {
-        let location = panic_info
-            .location()
-            .unwrap_or_else(|| panic::Location::caller());
-        let message = match panic_info.payload().downcast_ref::<&str>() {
-            Some(s) => *s,
-            None => match panic_info.payload().downcast_ref::<String>() {
-                Some(s) => &s[..],
-                None => "Box<Any>",
-            },
-        };
-
-        let error_info = format!(
-            "program panic:\nlocation: {}:{}\nerror: {}",
-            location.file(),
-            location.line(),
-            message
-        );
-
-        error!("{}", error_info);
-
-        // 发送错误到前端
-        let window = app_handle.get_webview_window("main").unwrap();
-        window.emit("rust-panic", error_info).unwrap_or_else(|e| {
-            error!(
-                "[setup_panic_handler] send panic info to frontend failed: {}",
-                e
-            );
-        });
-    }));
-}
-
-pub fn create_app_builder() -> tauri::Builder<tauri::Wry> {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::init(
-            MacosLauncher::LaunchAgent,
-            None,
-        ))
-        .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_positioner::init())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            let _ = app
-                .get_webview_window("main")
-                .expect("no main window")
-                .set_focus();
+pub fn run() {
+    let _ = logger::init_logger("info".into());
+    let app = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            runtime::show_settings(app);
         }))
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .args(["--background"])
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![
-            get_hint_default_style,
-            get_hint_types_styles,
-            get_config_for_frontend,
-            config::get_settings_platform,
-            save_config_for_frontend,
-            language::get_system_languages,
-            updates::get_release_status,
-            updates::open_releases_page,
-            permissions::get_permission_status,
-            permissions::open_permission_settings,
+            runtime::record_shortcut,
+            runtime::set_live_preview,
+            runtime::get_settings,
+            runtime::save_settings,
+            runtime::get_session,
+            runtime::open_search,
+            runtime::search,
+            runtime::navigate,
+            runtime::activate,
+            runtime::cancel,
+            runtime::get_thumbnail,
+            runtime::get_permissions,
+            runtime::request_permission,
+            runtime::get_diagnostics
         ])
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                window.hide().unwrap();
-                api.prevent_close();
-            }
+        .setup(|app| {
+            runtime::init(app.handle().clone())?;
+            let search = MenuItem::with_id(app, "search", "Search windows", true, None::<&str>)?;
+            let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit BeaconHop", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&search, &settings, &quit])?;
+            TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("BeaconHop")
+                .menu(&menu)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "search" => {
+                        runtime::open_search_inner();
+                    }
+                    "settings" => runtime::show_settings(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .build(app)?;
+            input::init(app.handle().clone());
+            Ok(())
         })
-}
-
-pub fn create_overlay_window(
-    app_handle: &AppHandle,
-    window_label: &str,
-    monitor: &monitor::MonitorInfo,
-) {
-    // 如果已存在，先关闭
-    if let Some(existing_window) = app_handle.get_webview_window(&window_label) {
-        warn!("[create_overlay_window] close existing window: {}", window_label);
-        if let Err(e) = existing_window.close() {
-            error!(
-                "[create_overlay_window] close existing window failed: {}",
-                e
-            );
-        }
-    }
-
-    let width = monitor.width as f64 / monitor.scale_factor;
-    let height = monitor.height as f64 / monitor.scale_factor;
-    let position_x = monitor.x;
-    let position_y = monitor.y;
-    info!(
-        "[create_overlay_window] create overlay window {}: position({}, {}), size{}x{}",
-        window_label, position_x, position_y, width, height
-    );
-    let window = tauri::WebviewWindowBuilder::new(
-        app_handle,
-        window_label,
-        tauri::WebviewUrl::App(format!("overlay.html?window_label={}", window_label).into()),
-    )
-    .title(window_label)
-    .transparent(true)
-    .decorations(false)
-    // must disable shadow, otherwise the window will be offset
-    .shadow(false)
-    .resizable(true)
-    .inner_size(width, height)
-    .focused(false)
-    // A transparent, empty NSWindow still appears in third-party switchers.
-    // Configure its accessibility identity before first ordering it on screen.
-    .visible(!cfg!(target_os = "macos") || config::get_config().unwrap().system.debug_mode)
-    .build();
-
-    if let Err(e) = window {
-        panic!(
-            "[create_overlay_window] create overlay window failed: {}",
-            e
-        );
-    }
-
-    let window = window.unwrap();
-    #[cfg(target_os = "macos")]
-    if let Err(e) = window.set_position(tauri::LogicalPosition::new(
-        position_x as f64 / monitor.scale_factor,
-        position_y as f64 / monitor.scale_factor,
-    )) {
-        error!("[create_overlay_window] set position failed: {}", e);
-    }
-    #[cfg(target_os = "windows")]
-    if let Err(e) = window.set_position(tauri::PhysicalPosition::new(position_x, position_y)) {
-        error!("[create_overlay_window] set position failed: {}", e);
-    }
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(hwnd) = window.hwnd() {
-            let hwnd_raw = hwnd.0;
-            const DWMWA_WINDOW_CORNER_PREFERENCE: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(33);
-            const DWMWCP_DONOTROUND: u32 = 1;
-            let preference: u32 = DWMWCP_DONOTROUND;
-            unsafe {
-                let _ = DwmSetWindowAttribute(
-                    HWND(hwnd_raw as *mut _),
-                    DWMWA_WINDOW_CORNER_PREFERENCE,
-                    &preference as *const _ as _,
-                    std::mem::size_of_val(&preference) as u32,
-                );
-                if !config::get_config().unwrap().system.debug_mode {
-                    set_window_transparent_style_win(&window, hwnd_raw as i64);
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                if window.label() == "switcher" {
+                    runtime::cancel_inner();
+                } else {
+                    let _ = window.hide();
                 }
             }
-            if let Ok(mut handles) = OVERLAY_HANDLES_STORAGE.lock() {
-                handles.insert(window_label.to_string(), hwnd_raw as i64);
+            if window.label() == "switcher" && matches!(event, tauri::WindowEvent::Focused(false)) {
+                runtime::lost_focus();
             }
+        })
+        .build(tauri::generate_context!())
+        .expect("Could not start BeaconHop");
+    app.run(|_, event| {
+        if matches!(event, tauri::RunEvent::Exit) {
+            input::cleanup();
         }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        if !config::get_config().unwrap().system.debug_mode {
-            set_window_transparent_style_non_win(&window);
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn set_window_transparent_style_win(window: &tauri::WebviewWindow, hwnd_raw: i64) {
-    // 设置无任务栏图标并确保在最顶层
-    if let Err(e) = window.set_skip_taskbar(true) {
-        error!("[set_overlay_style] set skip taskbar failed: {}", e);
-    }
-    if let Err(e) = window.set_always_on_top(true) {
-        error!("[set_overlay_style] set always on top failed: {}", e);
-    }
-
-    // 设置扩展窗口样式
-    unsafe {
-        let style = GetWindowLongW(HWND(hwnd_raw as *mut _), GWL_EXSTYLE);
-        // 确保WS_EX_TRANSPARENT样式被正确设置
-        SetWindowLongW(
-            HWND(hwnd_raw as *mut _),
-            GWL_EXSTYLE,
-            style | (WS_EX_TRANSPARENT.0 | WS_EX_LAYERED.0) as i32,
-        );
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn set_window_transparent_style_non_win(window: &tauri::WebviewWindow) {
-    if let Err(e) = window.set_skip_taskbar(true) {
-        error!("[set_overlay_style] set skip taskbar failed: {}", e);
-    }
-    #[cfg(not(target_os = "macos"))]
-    if let Err(e) = window.set_always_on_top(true) {
-        error!("[set_overlay_style] set always on top failed: {}", e);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        if let Err(e) = window.set_ignore_cursor_events(true) {
-            error!("[set_overlay_style] set_ignore_cursor_events failed: {}", e);
-        }
-        if let Err(e) = window.with_webview(|webview| unsafe {
-            macos_window::configure_overlay(webview.ns_window());
-        }) {
-            error!("[set_overlay_style] configure native overlay failed: {}", e);
-        }
-    }
+    });
 }

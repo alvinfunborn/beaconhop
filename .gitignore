@@ -11,3 +11,9 @@ node_modules
 **/logs
 # SpecStory explanation file
 .specstory/.what-is-this.md
+
+.tools/
+playwright-report/
+test-results/
+__pycache__/
+*.pyc

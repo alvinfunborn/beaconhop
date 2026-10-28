@@ -1,81 +1,59 @@
-identifier = "com.screen-buoy.dev"
-version = "1.4.3"
-productName = "screen-buoy"
+identifier = "com.beaconhop.app"
+version = "0.1.0"
+productName = "BeaconHop"
 
 [build]
 beforeDevCommand = "npm run dev"
 beforeBuildCommand = "npm run build"
-devUrl = "http://localhost:1420"
-frontendDist = ["../dist"] # v2 需要明确指定
+devUrl = "http://localhost:1437"
+frontendDist = "../dist"
 
 [app]
 macOSPrivateApi = true
 
 [app.security]
-capabilities = ["main-capability", "updater-capability"]
-
-# # v2 需要显式设置 security
-# [app.security]
-# capabilities = [
-#   "app-show", "app-hide",                    # 应用显隐
-#   "window-show", "window-hide",              # 窗口显隐
-#   "window-close", "window-set-focus", "window-start-dragging",  # 窗口操作
-#   "process-exit", "process-relaunch",        # 进程控制
-#   "global-shortcut-all",                     # 全局快捷键
-#   "tray-icon",                              # 系统托盘
-#   "event-all",                              # 替换原来的 event-listen 和 event-emit
-#   "ipc-invoke",                             # IPC 调用
-#   "devtools"                                # 开发工具
-# ]
-# # 如果需要用到 tauri-plugin-shell, 需要定义 shell scope
-# # shell = { scope = [] }
+capabilities = ["main-capability"]
+csp = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; script-src 'self'"
 
 [[app.windows]]
 label = "main"
-title = "Screen Buoy"
+title = "BeaconHop"
 url = "index.html"
-width = 960
-height = 780
-resizable = true
-fullscreen = false
+width = 1020
+height = 760
+minWidth = 760
+minHeight = 580
 center = true
 visible = false
-# decorations = true # 根据需要设置
-# transparent = false # 根据需要设置
+
+[[app.windows]]
+label = "switcher"
+title = "BeaconHop Switcher"
+url = "index.html?view=switcher"
+width = 1000
+height = 640
+visible = false
+decorations = false
+transparent = true
+shadow = true
+skipTaskbar = true
+alwaysOnTop = true
+resizable = false
+focus = false
 
 [bundle]
 active = true
-targets = ["app"] # Release CI also builds an NSIS installer on Windows.
-icon = [
-  "icons/icon.icns", # macOS rounded icon with transparent margins
-  "icons/icon.ico",
-  "icons/icon.png",
-]
-copyright = "Copyright (c) 2025 alvinfunborn"
-category = "DeveloperTool"
-shortDescription = ""
-longDescription = ""
-
-# [bundle.deb]
-# depends = []
+targets = "all"
+icon = ["icons/icon.icns", "icons/icon.ico", "icons/icon.png"]
+copyright = "Copyright © 2026 BeaconHop contributors. Based on Screen Buoy (MIT)."
+category = "Productivity"
+shortDescription = "Follow the hint. Hop to your work."
+longDescription = "Keyboard-first window navigation with visual hints, previews and search across desktops and displays."
 
 [bundle.macOS]
-minimumSystemVersion = "10.15"
-exceptionDomain = ""
+minimumSystemVersion = "14.0"
+signingIdentity = "-"
 
-[bundle.windows]
-# certificateThumbprint = null
-digestAlgorithm = "sha256"
-timestampUrl = ""
-# wix = {} # 可选，用于 WiX 配置
-
-[plugins.trayIcon]
-iconPath = "icons/icon.png"
-iconAsTemplate = false
-
-[plugins.updater]
-pubkey = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY5QTc0NUE2QTJFRTBBMjQKUldRa0N1Nmlwa1duYWFoZTlMOWl2SGIxaXgzcnhvVzdzSGkzY2pCZHI3UmhKUWhqMkxlNnN0WDgK"
-endpoints = ["https://github.com/alvinfunborn/screen-buoy/releases/latest/download/latest.json"]
-
-[plugins.updater.windows]
-installMode = "passive"
+[bundle.windows.nsis]
+displayLanguageSelector = true
+languages = ["English", "SimpChinese"]

@@ -20,7 +20,9 @@ pub fn has_input_monitoring_access() -> bool {
 }
 
 pub fn request_input_monitoring() {
-    unsafe { CGRequestListenEventAccess(); }
+    unsafe {
+        CGRequestListenEventAccess();
+    }
 }
 
 pub fn request_accessibility() {
@@ -56,7 +58,11 @@ pub fn is_accessibility_trusted() -> bool {
 fn accessibility_trusted(prompt: bool) -> bool {
     let dict: CFDictionary<CFString, CFBoolean> = CFDictionary::from_CFType_pairs(&[(
         CFString::from_static_string("AXTrustedCheckOptionPrompt"),
-        if prompt { CFBoolean::true_value() } else { CFBoolean::false_value() },
+        if prompt {
+            CFBoolean::true_value()
+        } else {
+            CFBoolean::false_value()
+        },
     )]);
     unsafe { AXIsProcessTrustedWithOptions(dict.as_concrete_TypeRef()) != 0 }
 }

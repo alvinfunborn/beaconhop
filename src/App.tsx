@@ -1,101 +1,1108 @@
-import { useState, useEffect } from 'react'
-import Settings from './components/settings/Settings'
-import { ConfigProvider, message } from 'antd'
-import en_US from 'antd/locale/en_US'
-import zh_CN from 'antd/locale/zh_CN'
-import zh_TW from 'antd/locale/zh_TW'
-import ja_JP from 'antd/locale/ja_JP'
-import ko_KR from 'antd/locale/ko_KR'
-import es_ES from 'antd/locale/es_ES'
-import fr_FR from 'antd/locale/fr_FR'
-import de_DE from 'antd/locale/de_DE'
-import pt_BR from 'antd/locale/pt_BR'
-import ru_RU from 'antd/locale/ru_RU'
-import it_IT from 'antd/locale/it_IT'
-import ar_EG from 'antd/locale/ar_EG'
-import hi_IN from 'antd/locale/hi_IN'
-import id_ID from 'antd/locale/id_ID'
-import vi_VN from 'antd/locale/vi_VN'
-import th_TH from 'antd/locale/th_TH'
-import tr_TR from 'antd/locale/tr_TR'
-import { languages } from './language.js'
-import { useTranslation } from 'react-i18next'
-import 'antd/dist/reset.css'
-import './styles/App.css'
-import { listen } from '@tauri-apps/api/event'
-
-
-const componentLocales = {
-  'en': en_US,
-  'zh': zh_CN,
-  'zh-TW': zh_TW,
-  'ja': ja_JP,
-  'ko': ko_KR,
-  'es': es_ES,
-  'fr': fr_FR,
-  'de': de_DE,
-  'pt': pt_BR,
-  'ru': ru_RU,
-  'it': it_IT,
-  'ar': ar_EG,
-  'hi': hi_IN,
-  'id': id_ID,
-  'vi': vi_VN,
-  'th': th_TH,
-  'tr': tr_TR,
+import { useEffect, useRef, useState } from "react";
+import type { Config, Session, Permissions, Destination } from "./types";
+import { call, subscribe, defaults, native, preview } from "./api";
+const isMac = navigator.platform.toLowerCase().includes("mac");
+const windowsNative =
+  native && navigator.platform.toLowerCase().includes("win");
+function shortcut(s: string) {
+  return s
+    .replace("Super", isMac ? "⌘" : "Win")
+    .replace("Alt", isMac ? "⌥" : "Alt")
+    .replace("Backquote", "`")
+    .replace("Control", isMac ? "⌃" : "Ctrl")
+    .replaceAll("+", " + ");
 }
-
-function App() {
-  const { t, i18n } = useTranslation()
-  const [error, setError] = useState<string | null>(null)
-
+function useSettings() {
+  const [config, setConfig] = useState<Config>(defaults);
   useEffect(() => {
-    const handleError = (error: ErrorEvent) => {
-      console.error('React Error:', error);
-      setError(error.message);
-    };
-    window.addEventListener('error', handleError);
-
-    const unlistenPanic = listen('rust-panic', (event) => {
-      console.error('Rust panic:', event.payload);
-      message.error({
-        content: i18n.t('settings.panicError'),
-        duration: 0,
-      });
-    });
-
+    let disposed = false;
+    let off = () => {};
+    subscribe<Config>("settings", (c) => setConfig(c)).then((f) =>
+      disposed ? f() : (off = f),
+    );
+    call<Config>("get_settings")
+      .then((c) => {
+        if (!disposed) setConfig(c);
+      })
+      .catch(() => {});
     return () => {
-      window.removeEventListener('error', handleError);
-      unlistenPanic.then(unlisten => unlisten());
+      disposed = true;
+      off();
     };
   }, []);
-
+  return [config, setConfig] as const;
+}
+export default function App() {
+  const [config] = useSettings();
+  const zh =
+    config.language === "zh" ||
+    (config.language === "system" && navigator.language.startsWith("zh"));
+  useEffect(() => {
+    document.documentElement.dataset.theme = config.theme;
+    document.documentElement.lang = zh ? "zh-CN" : "en";
+  }, [config.theme, zh]);
+  if (!native && !preview)
+    return (
+      <div className="standalone">
+        <img src="/beaconhop.svg" />
+        <h1>BeaconHop</h1>
+        <p>Open the desktop app to navigate your windows.</p>
+      </div>
+    );
+  return new URLSearchParams(location.search).get("view") === "switcher" ? (
+    <Switcher config={config} zh={zh} />
+  ) : (
+    <Settings initial={config} zh={zh} />
+  );
+}
+function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
+  const t = (en: string, cn: string) => (zh ? cn : en);
+  const [draft, setDraft] = useState(initial);
+  const [tab, setTab] = useState("general");
+  const [permissions, setPermissions] = useState<Permissions>();
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const [diagnostics, setDiagnostics] = useState("");
+  useEffect(() => setDraft(initial), [initial]);
+  useEffect(() => {
+    const refresh = () =>
+      call<Permissions>("get_permissions")
+        .then(setPermissions)
+        .catch(() => {});
+    refresh();
+    const timer = setInterval(refresh, 2500);
+    return () => clearInterval(timer);
+  }, []);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
+  function change<K extends keyof Config>(key: K, value: Config[K]) {
+    setDraft((d) => ({ ...d, [key]: value }));
+    setNotice("");
+    setError("");
+  }
+  async function save() {
+    setBusy(true);
+    setError("");
+    try {
+      await call("save_settings", { config: draft });
+      setNotice(t("Settings saved", "设置已保存"));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  function toggle(
+    key:
+      | "holdEnabled"
+      | "includeMinimized"
+      | "includeHidden"
+      | "thumbnails"
+      | "startAtLogin"
+      | "startInTray",
+    title: string,
+    description: string,
+  ) {
+    return (
+      <Setting title={title} description={description}>
+        <button
+          className={"toggle " + (draft[key] ? "on" : "")}
+          role="switch"
+          aria-checked={draft[key]}
+          aria-label={title}
+          onClick={() => change(key, !draft[key])}
+        >
+          <span />
+        </button>
+      </Setting>
+    );
+  }
+  function select(
+    key: "desktopScope" | "displayScope" | "layout" | "theme" | "language",
+    title: string,
+    description: string,
+    choices: [string, string][],
+  ) {
+    return (
+      <Setting title={title} description={description}>
+        <select
+          aria-label={title}
+          value={draft[key]}
+          onChange={(e) => change(key, e.target.value as never)}
+        >
+          {choices.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </Setting>
+    );
+  }
+  const tabs = [
+    ["general", "⌘", t("Shortcuts", "快捷键")],
+    ["scope", "▤", t("Window scope", "窗口范围")],
+    ["appearance", "◐", t("Appearance", "外观")],
+    ["system", "⚙", t("System & access", "系统与权限")],
+    ["about", "◎", t("About", "关于")],
+  ];
   return (
-    <ConfigProvider locale={componentLocales[i18n.resolvedLanguage as keyof typeof componentLocales] ?? en_US}
-      direction={languages.find(language => language.code === i18n.resolvedLanguage)?.direction === 'rtl' ? 'rtl' : 'ltr'} theme={{
-      token: {
-        colorPrimary: '#6941c6', colorInfo: '#6941c6', colorSuccess: '#247f64',
-        colorText: '#292633', colorTextSecondary: '#706b7c', colorBorder: '#dfdce6',
-        colorBgLayout: '#f8f7fa', borderRadius: 8, controlHeight: 36, fontSize: 13,
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif',
-      },
-      components: {
-        Tabs: { itemSelectedColor: '#5931b3', itemHoverColor: '#5931b3', titleFontSize: 13 },
-        Select: { multipleItemBg: '#f0ecf8' },
-        Form: { labelColor: '#3b3648', labelFontSize: 13 },
-        Collapse: { headerBg: '#faf9fc', contentBg: '#ffffff' },
-      },
-    }}>
-    <div className="container">
-      {error && (
-        <div className="error-message">
-          {t('settings.runtimeError', { error })}
+    <div className="settings-shell">
+      <aside>
+        <a className="brand">
+          <img src="/beaconhop.svg" />
+          <span>
+            BeaconHop<small>WORK NAVIGATION</small>
+          </span>
+        </a>
+        <nav>
+          {tabs.map(([id, icon, label]) => (
+            <button
+              key={id}
+              className={tab === id ? "active" : ""}
+              onClick={() => setTab(id)}
+            >
+              <span aria-hidden="true">{icon}</span>
+              {label}
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-bottom">
+          <div
+            className={"status-dot " + (permissions?.ready ? "ready" : "")}
+          />
+          {permissions?.ready
+            ? t("Ready to hop", "随时跳转")
+            : t("Access needed", "需要授权")}
+          <small>v0.1.0{preview ? " · Preview" : ""}</small>
         </div>
-      )}
-      <Settings />
+      </aside>
+      <main className="settings-main">
+        <header className="page-header">
+          <div>
+            <div className="eyebrow">BEACONHOP / {tab.toUpperCase()}</div>
+            <h1>{tabs.find((x) => x[0] === tab)?.[2]}</h1>
+          </div>
+          <button
+            className="button secondary"
+            onClick={() =>
+              call("open_search").catch((e) => setError(String(e)))
+            }
+          >
+            {t("Try a hop", "试着跳转")}{" "}
+            <kbd>{shortcut(initial.searchShortcut)}</kbd>
+          </button>
+        </header>
+        <div className="settings-scroll">
+          {tab === "general" && (
+            <>
+              <div className="hero">
+                <span className="hero-signal">↗</span>
+                <div>
+                  <h2>
+                    {t(
+                      "See it. Hint it. Hop.",
+                      "看见目标，按下提示，直接抵达。",
+                    )}
+                  </h2>
+                  <p>
+                    {t(
+                      "Your work is already open. Take the shortest way back.",
+                      "工作现场已经打开，用最短的路径回去。",
+                    )}
+                  </p>
+                </div>
+                <div className="hero-keys">
+                  <kbd>A</kbd>
+                  <kbd>S</kbd>
+                  <kbd>D</kbd>
+                </div>
+              </div>
+              <section>
+                <h2>{t("Two ways to get there", "两种抵达方式")}</h2>
+                {toggle(
+                  "holdEnabled",
+                  t("Hold to switch", "按住切换"),
+                  t(
+                    "Hold the modifier, then type a hint to jump immediately.",
+                    "按住修饰键，输入屏幕字母后立即切换。",
+                  ),
+                )}
+                <Setting
+                  title={t("Hold shortcut", "按住模式快捷键")}
+                  description={t(
+                    "Tab cycles. Shift reverses. Release to open the selection.",
+                    "Tab 循环，Shift 反向，松开修饰键切换到选中窗口。",
+                  )}
+                >
+                  <Shortcut
+                    value={draft.holdShortcut}
+                    onChange={(v) => change("holdShortcut", v)}
+                    label={t("Hold shortcut", "按住模式快捷键")}
+                  />
+                </Setting>
+                <Setting
+                  title={t("Search shortcut", "搜索模式快捷键")}
+                  description={t(
+                    "Open search directly. Type a title or application name.",
+                    "直接打开搜索，可以松开快捷键，输入标题或应用名。",
+                  )}
+                >
+                  <Shortcut
+                    value={draft.searchShortcut}
+                    onChange={(v) => change("searchShortcut", v)}
+                    label={t("Search shortcut", "搜索模式快捷键")}
+                  />
+                </Setting>
+                <div className="tip">
+                  <kbd>\</kbd>
+                  <span>
+                    {t(
+                      "Press backslash while holding to enter search. You can let go of the modifier.",
+                      "在按住模式按反斜杠进入搜索，此时可以松开修饰键。",
+                    )}
+                  </span>
+                </div>
+              </section>
+              <section>
+                <h2>{t("Your hint alphabet", "顺手的提示字母")}</h2>
+                <Setting
+                  title={t("Letters in priority order", "字母优先顺序")}
+                  description={t(
+                    "4–26 unique A–Z letters. Hints stay fixed until you close the switcher.",
+                    "4–26 个不重复的 A–Z 字母。一次唤起期间，提示保持不变。",
+                  )}
+                >
+                  <input
+                    className="alphabet"
+                    aria-label={t("Hint letters", "提示字母")}
+                    value={draft.hintAlphabet}
+                    onChange={(e) =>
+                      change(
+                        "hintAlphabet",
+                        e.target.value.toUpperCase().replace(/[^A-Z]/g, ""),
+                      )
+                    }
+                    spellCheck={false}
+                    maxLength={26}
+                  />
+                </Setting>
+                <div className="hint-preview">
+                  {draft.hintAlphabet
+                    .slice(0, 12)
+                    .split("")
+                    .map((c, i) => (
+                      <kbd key={i}>{c}</kbd>
+                    ))}
+                </div>
+              </section>
+            </>
+          )}
+          {tab === "scope" && (
+            <>
+              <p className="intro">
+                {t(
+                  "Choose how much of your work comes into view. Desktop and display filters are independent.",
+                  "决定一次看到多大范围的工作。桌面和显示器可以独立设置。",
+                )}
+              </p>
+              <section>
+                <h2>{t("Where to look", "查找范围")}</h2>
+                {select(
+                  "desktopScope",
+                  t("Virtual desktops", "虚拟桌面"),
+                  t(
+                    "A hop follows the window to its desktop; it does not move the window.",
+                    "切换时跟随窗口前往它所在的桌面，窗口位置保持不变。",
+                  ),
+                  [
+                    ["all", t("All desktops", "所有桌面")],
+                    ["current", t("Current desktop", "当前桌面")],
+                  ],
+                )}
+                {select(
+                  "displayScope",
+                  t("Displays", "显示器"),
+                  t(
+                    "Current display follows the window you are working in.",
+                    "当前显示器以正在使用的窗口为准。",
+                  ),
+                  [
+                    ["all", t("All displays", "所有显示器")],
+                    ["current", t("Current display", "当前显示器")],
+                  ],
+                )}
+                {toggle(
+                  "includeMinimized",
+                  t("Minimized windows", "包含最小化窗口"),
+                  t(
+                    "Restore a minimized window when you choose it.",
+                    "选择后恢复最小化的窗口。",
+                  ),
+                )}
+                {toggle(
+                  "includeHidden",
+                  t("Hidden applications", "包含隐藏应用"),
+                  t(
+                    "Include windows from applications hidden on macOS.",
+                    "包含 macOS 上被隐藏的应用窗口。",
+                  ),
+                )}
+              </section>
+              <section>
+                <h2>{t("Keep these out", "排除这些应用")}</h2>
+                <p className="muted">
+                  {t(
+                    "One exact app name or bundle ID / executable path per line.",
+                    "每行一个完整应用名，或 bundle ID / 可执行文件路径。",
+                  )}
+                </p>
+                <textarea
+                  aria-label={t("Excluded applications", "排除应用")}
+                  placeholder={
+                    isMac
+                      ? "com.apple.finder\nMusic"
+                      : "notepad\nC:\\Apps\\example.exe"
+                  }
+                  value={draft.excludedApps.join("\n")}
+                  onChange={(e) =>
+                    change("excludedApps", e.target.value.split("\n"))
+                  }
+                  rows={5}
+                />
+              </section>
+            </>
+          )}
+          {tab === "appearance" && (
+            <>
+              <p className="intro">
+                {t(
+                  "A clear view, at your own pace.",
+                  "清楚看见目标，保持自己的节奏。",
+                )}
+              </p>
+              <section>
+                <h2>{t("Switcher", "切换面板")}</h2>
+                {toggle(
+                  "thumbnails",
+                  t("Window previews", "窗口缩略图"),
+                  t(
+                    "Previews load in the background. Protected windows may show an app placeholder.",
+                    "预览在后台加载；受保护的窗口可能显示应用占位图。",
+                  ),
+                )}
+                {select(
+                  "layout",
+                  t("Layout", "布局"),
+                  t(
+                    "Use a visual grid or a compact list.",
+                    "选择缩略图网格或紧凑列表。",
+                  ),
+                  [
+                    ["grid", t("Grid", "网格")],
+                    ["list", t("List", "列表")],
+                  ],
+                )}
+                {select("theme", t("Theme", "主题"), "", [
+                  ["system", t("Follow system", "跟随系统")],
+                  ["dark", t("Dark", "深色")],
+                  ["light", t("Light", "浅色")],
+                ])}
+                {select("language", t("Language", "语言"), "", [
+                  ["system", t("Follow system", "跟随系统")],
+                  ["en", "English"],
+                  ["zh", "简体中文"],
+                ])}
+              </section>
+              <div className="appearance-preview">
+                <div className="mini-card">
+                  <div className="mini-screen">
+                    <span>↗</span>
+                  </div>
+                  <div>
+                    <kbd>A</kbd> BeaconHop
+                  </div>
+                </div>
+                <div>
+                  <h2>{t("A signal, then a hop.", "一个信号，一次抵达。")}</h2>
+                  <p className="muted">
+                    {t(
+                      "High contrast hints stay easy to find.",
+                      "高对比提示，让目标一眼可见。",
+                    )}
+                  </p>
+                </div>
+              </div>
+            </>
+          )}
+          {tab === "system" && (
+            <>
+              <section>
+                <h2>{t("Make it part of your day", "随时待命")}</h2>
+                {toggle(
+                  "startAtLogin",
+                  t("Launch at login", "登录时启动"),
+                  t(
+                    "Have BeaconHop ready when you start working.",
+                    "开始工作时，BeaconHop 已经就绪。",
+                  ),
+                )}
+                {toggle(
+                  "startInTray",
+                  t("Start quietly", "启动时收起设置"),
+                  t(
+                    "Keep settings closed and run from the menu bar or system tray.",
+                    "在菜单栏或系统托盘运行。",
+                  ),
+                )}
+              </section>
+              <section>
+                <h2>{t("Permissions & health", "权限与运行状态")}</h2>
+                {permissions?.required ? (
+                  <>
+                    {[
+                      [
+                        "accessibility",
+                        "accessibility",
+                        t("Accessibility", "辅助功能"),
+                        t(
+                          "Find and focus individual windows.",
+                          "查找和聚焦具体窗口。",
+                        ),
+                      ],
+                      [
+                        "inputMonitoring",
+                        "input",
+                        t("Input monitoring", "输入监控"),
+                        t(
+                          "Receive global shortcuts and hint keys.",
+                          "接收全局快捷键和提示按键。",
+                        ),
+                      ],
+                      [
+                        "screenRecording",
+                        "screen",
+                        t("Screen recording", "屏幕录制"),
+                        t(
+                          "Capture window previews. Switching works without previews.",
+                          "生成窗口预览；未授权时仍可使用窗口切换。",
+                        ),
+                      ],
+                    ].map(([key, kind, title, description]) => (
+                      <Setting
+                        key={key}
+                        title={title}
+                        description={description}
+                      >
+                        {permissions[key as keyof Permissions] ? (
+                          <span className="badge good">
+                            {t("Granted", "已授权")}
+                          </span>
+                        ) : (
+                          <button
+                            className="button secondary"
+                            onClick={() =>
+                              call("request_permission", { kind }).catch((e) =>
+                                setError(String(e)),
+                              )
+                            }
+                          >
+                            {t("Grant access", "前往授权")}
+                          </button>
+                        )}
+                      </Setting>
+                    ))}
+                    <p className="small muted">
+                      {t(
+                        "After changing macOS permissions, a restart may be required.",
+                        "更改 macOS 权限后，可能需要退出并重新打开应用。",
+                      )}
+                    </p>
+                  </>
+                ) : (
+                  <p className="muted">
+                    {t(
+                      "No additional permissions are normally required on Windows.",
+                      "Windows 通常无需额外授权。",
+                    )}
+                  </p>
+                )}
+                <Setting
+                  title={t("Keyboard listener", "键盘监听")}
+                  description={t(
+                    "The native listener must be running for global shortcuts.",
+                    "全局快捷键需要原生监听正常运行。",
+                  )}
+                >
+                  <span
+                    className={
+                      "badge " +
+                      (permissions?.keyboardHook ? "good" : "pending")
+                    }
+                  >
+                    {permissions?.keyboardHook
+                      ? t("Running", "运行中")
+                      : t("Not ready", "未就绪")}
+                  </span>
+                </Setting>
+              </section>
+              <section>
+                <h2>{t("Diagnostics", "诊断")}</h2>
+                <button
+                  className="button secondary"
+                  onClick={() =>
+                    call("get_diagnostics")
+                      .then((v) => setDiagnostics(JSON.stringify(v, null, 2)))
+                      .catch((e) => setError(String(e)))
+                  }
+                >
+                  {t("Show diagnostics", "查看诊断信息")}
+                </button>
+                {diagnostics && (
+                  <pre className="diagnostics">{diagnostics}</pre>
+                )}
+              </section>
+            </>
+          )}
+          {tab === "about" && (
+            <div className="about">
+              <img src="/beaconhop.svg" />
+              <h1>BeaconHop</h1>
+              <p className="tagline">Follow the hint. Hop to your work.</p>
+              <p>
+                {t(
+                  "A little beacon for wherever your work takes you.",
+                  "无论工作延伸到哪里，总有一个信号带你抵达。",
+                )}
+              </p>
+              <span className="badge">0.1.0 · macOS & Windows</span>
+              <div className="about-details">
+                <p>
+                  {t(
+                    "Built on Screen Buoy. Open source under the MIT license.",
+                    "基于 Screen Buoy 改造，采用 MIT 开源许可证。",
+                  )}
+                </p>
+                <p>
+                  {t(
+                    "Window discovery, search and previews stay on your computer.",
+                    "窗口发现、搜索与预览均在本机处理。",
+                  )}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+        <footer className="settings-footer">
+          <span
+            role={error ? "alert" : "status"}
+            className={error ? "error" : "muted"}
+          >
+            {error ||
+              notice ||
+              (dirty
+                ? t("Unsaved changes", "有未保存的修改")
+                : t(
+                    "Follow the hint. Hop to your work.",
+                    "循着提示，回到工作。",
+                  ))}
+          </span>
+          <div>
+            <button
+              className="button ghost"
+              disabled={!dirty || busy}
+              onClick={() => {
+                setDraft(initial);
+                setError("");
+              }}
+            >
+              {t("Discard", "撤销")}
+            </button>
+            <button
+              className="button primary"
+              disabled={!dirty || busy}
+              onClick={save}
+            >
+              {busy ? t("Saving…", "保存中…") : t("Save changes", "保存设置")}
+            </button>
+          </div>
+        </footer>
+      </main>
     </div>
-    </ConfigProvider>
-  )
+  );
+}
+function Setting({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="setting">
+      <div>
+        <h3>{title}</h3>
+        {description && <p>{description}</p>}
+      </div>
+      <div className="setting-control">{children}</div>
+    </div>
+  );
+}
+function Shortcut({
+  value,
+  onChange,
+  label,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  label: string;
+}) {
+  const [recording, setRecording] = useState(false);
+  useEffect(() => {
+    if (!recording) return;
+    let disposed = false;
+    let off = () => {};
+    subscribe<string>("shortcut-recorded", (value) => {
+      if (value) onChange(value);
+      setRecording(false);
+    }).then((f) => (disposed ? f() : (off = f)));
+    call("record_shortcut", { enabled: true }).catch(() => {});
+    return () => {
+      disposed = true;
+      off();
+      call("record_shortcut", { enabled: false }).catch(() => {});
+    };
+  }, [recording]);
+  return (
+    <button
+      className={"shortcut " + (recording ? "recording" : "")}
+      aria-label={label}
+      onClick={() => setRecording(true)}
+      onBlur={() => setRecording(false)}
+      onKeyDown={(e) => {
+        if (!recording) return;
+        e.preventDefault();
+        if (native) return;
+        if (e.key === "Escape") {
+          setRecording(false);
+          return;
+        }
+        const modifiers = [
+          e.ctrlKey ? "Ctrl" : "",
+          e.altKey ? "Alt" : "",
+          e.metaKey ? "Super" : "",
+          e.shiftKey ? "Shift" : "",
+        ].filter(Boolean);
+        const key = e.code.startsWith("Key")
+          ? e.code.slice(3)
+          : e.code.startsWith("Digit")
+            ? e.code.slice(5)
+            : e.code;
+        if (
+          ["Tab", "Space", "Backquote"].includes(key) ||
+          /^[A-Z0-9]$/.test(key)
+        ) {
+          if (modifiers.length) {
+            onChange([...modifiers, key].join("+"));
+            setRecording(false);
+          }
+        }
+      }}
+    >
+      {recording ? "Press shortcut…" : shortcut(value)}
+    </button>
+  );
 }
 
-export default App
+function Switcher({ config, zh }: { config: Config; zh: boolean }) {
+  const t = (en: string, cn: string) => (zh ? cn : en);
+  const [session, setSession] = useState<Session>();
+  const [query, setQuery] = useState("");
+  const [error, setError] = useState("");
+  const input = useRef<HTMLInputElement>(null);
+  const composing = useRef(false);
+  const list = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    let disposed = false;
+    let off = () => {};
+    const accept = (s: Session) =>
+      setSession((old) =>
+        !old ||
+        s.sessionId > old.sessionId ||
+        (s.sessionId === old.sessionId && s.revision >= old.revision)
+          ? s
+          : old,
+      );
+    subscribe<Session>("session", accept).then((f) =>
+      disposed ? f() : (off = f),
+    );
+    call<Session>("get_session")
+      .then((s) => {
+        if (!disposed) accept(s);
+      })
+      .catch((e) => setError(String(e)));
+    return () => {
+      disposed = true;
+      off();
+    };
+  }, []);
+  useEffect(() => {
+    setQuery(session?.query ?? "");
+    setError("");
+    if (session?.mode === "search") {
+      const timer = setTimeout(() => input.current?.focus(), 0);
+      return () => clearTimeout(timer);
+    }
+  }, [session?.sessionId, session?.mode]);
+  useEffect(() => {
+    list.current
+      ?.querySelector('[aria-selected="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [session?.selected]);
+  async function action(name: string, args: Record<string, unknown> = {}) {
+    try {
+      await call(name, args);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+  const visible =
+    session?.windows
+      .filter((w) => session.resultIds.includes(w.id))
+      .sort(
+        (a, b) =>
+          session.resultIds.indexOf(a.id) - session.resultIds.indexOf(b.id),
+      ) ?? [];
+  const isSearch = session?.mode === "search";
+  return (
+    <div
+      className={"switcher " + (config.layout === "list" ? "list-layout" : "")}
+      onKeyDown={(e) => {
+        if (
+          !isSearch ||
+          composing.current ||
+          e.nativeEvent.isComposing ||
+          e.keyCode === 229
+        )
+          return;
+        if (e.key === "Escape") {
+          e.preventDefault();
+          action("cancel");
+        }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          action("activate", {
+            id: session?.selected,
+            sessionId: session?.sessionId,
+          });
+        }
+        if (
+          ["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft", "Tab"].includes(
+            e.key,
+          )
+        ) {
+          if (
+            e.target instanceof HTMLInputElement &&
+            ["ArrowLeft", "ArrowRight"].includes(e.key)
+          )
+            return;
+          e.preventDefault();
+          const columns =
+            config.layout === "grid" && list.current
+              ? getComputedStyle(list.current).gridTemplateColumns.split(" ")
+                  .length
+              : 1;
+          let delta =
+            ["ArrowUp", "ArrowLeft"].includes(e.key) ||
+            (e.key === "Tab" && e.shiftKey)
+              ? -1
+              : 1;
+          if (
+            config.layout === "grid" &&
+            ["ArrowUp", "ArrowDown"].includes(e.key)
+          )
+            delta *= columns;
+          action("navigate", { delta, sessionId: session?.sessionId });
+        }
+      }}
+    >
+      <header className="switcher-header">
+        <img src="/beaconhop.svg" />
+        <div className="switcher-heading">
+          {isSearch ? (
+            <input
+              ref={input}
+              aria-label={t("Search windows", "搜索窗口")}
+              placeholder={t("Where do you want to go?", "想去哪个工作现场？")}
+              value={query}
+              onCompositionStart={() => {
+                composing.current = true;
+              }}
+              onCompositionEnd={(e) => {
+                composing.current = false;
+                action("search", {
+                  query: e.currentTarget.value,
+                  sessionId: session?.sessionId,
+                });
+              }}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                if (!composing.current)
+                  action("search", {
+                    query: e.target.value,
+                    sessionId: session?.sessionId,
+                  });
+              }}
+            />
+          ) : (
+            <>
+              <h1>{t("Your next hop", "下一个工作现场")}</h1>
+              <p>
+                {t("Type a hint to go there", "按下提示字母，直接抵达")}
+                {session?.prefix && (
+                  <>
+                    {" "}
+                    · <strong>{session.prefix}</strong>
+                  </>
+                )}
+              </p>
+            </>
+          )}
+        </div>
+        <span className="count">
+          {visible.length} {t("windows", "个窗口")}
+        </span>
+        <button
+          className="icon-button"
+          aria-label={t("Close", "关闭")}
+          onClick={() => action("cancel")}
+        >
+          ×
+        </button>
+      </header>
+      {(error || session?.error) && (
+        <div className="switcher-error" role="alert">
+          {error || session?.error}
+        </div>
+      )}
+      {session?.warnings.map((w) => (
+        <div className="switcher-warning" key={w}>
+          {w}
+        </div>
+      ))}
+      <div
+        className="window-list"
+        ref={list}
+        role="listbox"
+        aria-label={t("Open windows", "已打开的窗口")}
+        aria-activedescendant={
+          session?.selected ? "window-" + session.selected : undefined
+        }
+      >
+        {visible.map((w) => (
+          <WindowCard
+            key={`${session?.sessionId}:${w.id}`}
+            window={w}
+            selected={w.id === session?.selected}
+            thumbnails={config.thumbnails && config.layout === "grid"}
+            sessionId={session?.sessionId ?? 0}
+            search={isSearch}
+            onSelect={() =>
+              action("activate", { id: w.id, sessionId: session?.sessionId })
+            }
+            zh={zh}
+          />
+        ))}
+        {!visible.length && (
+          <div className="empty">
+            <span>⌕</span>
+            <h2>
+              {query
+                ? t("No matching windows", "没有匹配的窗口")
+                : t("Nothing in view yet", "暂时没有窗口")}
+            </h2>
+            <p>
+              {query
+                ? t("Try another title or app name.", "试试其他标题或应用名。")
+                : t(
+                    "Open a window, or check your scope and Accessibility settings.",
+                    "打开一个窗口，或检查范围设置与辅助功能权限。",
+                  )}
+            </p>
+          </div>
+        )}
+      </div>
+      <footer className="switcher-footer">
+        <span>
+          <span className="tiny-beacon" />
+          BeaconHop{preview ? " · Preview" : ""}
+        </span>
+        <div>
+          {isSearch ? (
+            <>
+              <span>
+                <kbd>↑</kbd>
+                <kbd>↓</kbd> {t("navigate", "选择")}
+              </span>
+              <span>
+                <kbd>↵</kbd> {t("hop", "跳转")}
+              </span>
+            </>
+          ) : (
+            <>
+              <span>
+                <kbd>Tab</kbd> {t("cycle", "循环")}
+              </span>
+              <span>
+                <kbd>\</kbd> {t("search", "搜索")}
+              </span>
+            </>
+          )}
+          <span>
+            <kbd>Esc</kbd> {t("cancel", "取消")}
+          </span>
+        </div>
+      </footer>
+    </div>
+  );
+}
+function WindowCard({
+  window: w,
+  selected,
+  thumbnails,
+  sessionId,
+  search,
+  onSelect,
+  zh,
+}: {
+  window: Destination;
+  selected: boolean;
+  thumbnails: boolean;
+  sessionId: number;
+  search: boolean;
+  onSelect: () => void;
+  zh: boolean;
+}) {
+  const [image, setImage] = useState<string | null>(null);
+  const previewArea = useRef<HTMLDivElement>(null);
+  const element = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!thumbnails || !element.current || windowsNative) return;
+    let alive = true;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          observer.disconnect();
+          call<string | null>("get_thumbnail", { id: w.id })
+            .then((image) => {
+              if (alive) setImage(image);
+            })
+            .catch(() => {});
+        }
+      },
+      { rootMargin: "60px" },
+    );
+    observer.observe(element.current);
+    return () => {
+      alive = false;
+      observer.disconnect();
+    };
+  }, [w.id, thumbnails, sessionId]);
+  useEffect(() => {
+    if (!windowsNative || !thumbnails || !previewArea.current) return;
+    const node = previewArea.current;
+    let frame = 0;
+    let alive = true;
+    const update = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const r = node.getBoundingClientRect(),
+          container = node.closest(".window-list")!.getBoundingClientRect();
+        const scale = devicePixelRatio;
+        const bounds =
+          r.top >= container.top && r.bottom <= container.bottom
+            ? {
+                x: r.x * scale,
+                y: r.y * scale,
+                width: r.width * scale,
+                height: r.height * scale,
+              }
+            : null;
+        if (alive)
+          call("set_live_preview", { id: w.id, sessionId, bounds }).catch(
+            () => {},
+          );
+      });
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    update();
+    return () => {
+      alive = false;
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+      call("set_live_preview", { id: w.id, sessionId, bounds: null }).catch(
+        () => {},
+      );
+    };
+  }, [w.id, sessionId, thumbnails, search]);
+  return (
+    <button
+      ref={element}
+      id={"window-" + w.id}
+      role="option"
+      aria-selected={selected}
+      className={"window-card " + (selected ? "selected" : "")}
+      onClick={onSelect}
+      title={`${w.appName} — ${w.title}`}
+    >
+      <div className="preview-frame">
+        {windowsNative && thumbnails && (
+          <div className="native-preview-area" ref={previewArea} />
+        )}{" "}
+        {image ? (
+          <img className="window-preview" src={image} alt="" />
+        ) : (
+          <div className="window-placeholder">
+            {w.icon ? (
+              <img src={w.icon} alt="" />
+            ) : (
+              <span>{w.appName.slice(0, 1)}</span>
+            )}
+            <small>{w.appName}</small>
+          </div>
+        )}
+        {!search && <kbd className="window-hint">{w.hint}</kbd>}
+        {w.minimized && (
+          <span className="window-state">{zh ? "最小化" : "Minimized"}</span>
+        )}
+      </div>
+      <div className="window-meta">
+        {w.icon ? (
+          <img src={w.icon} alt="" />
+        ) : (
+          <span className="app-initial">{w.appName.slice(0, 1)}</span>
+        )}
+        <div>
+          <h2>{w.title}</h2>
+          <p>
+            {w.appName}
+            {w.desktopName && (
+              <>
+                {" "}
+                <span>· {w.desktopName}</span>
+              </>
+            )}
+          </p>
+        </div>
+        {selected && <span className="selected-arrow">↗</span>}
+      </div>
+    </button>
+  );
+}

@@ -1,349 +1,64 @@
-# Screen Buoy
+<p align="center"><img src="public/beaconhop.svg" width="112" alt="BeaconHop logo" /></p>
+<h1 align="center">BeaconHop</h1>
+<p align="center">Follow the hint. Hop to your work.</p>
 
-[Website](https://alvinfunborn.github.io/screen-buoy/) · [More projects](https://alvinfunborn.github.io/) · [Download](https://github.com/alvinfunborn/screen-buoy/releases/latest) · [Support development on Ko-fi](https://ko-fi.com/alvinfunborn)
+BeaconHop is a window navigator for macOS and Windows, adapted from [Screen Buoy](https://github.com/alvinfunborn/screen-buoy). It brings open windows into view with stable letter hints, previews and title/application search.
 
-[English](./README.md) | [中文](./README_zh.md)
+## Interaction
 
-> A cross-platform (Windows / macOS), fully interactive screen hint navigation and automation tool.
-> Inspired by Fluent Search and mousemaster, with enhanced multi-monitor and advanced interaction support.
+- **Alt + Tab**: hold Alt to see windows. Tab / Shift + Tab cycle through recent windows. Release Alt to switch.
+- **Type a complete hint while holding**: immediately activate that exact window. Hints stay fixed for the invocation.
+- **Backslash (`\`)**: enter persistent search; you can release Alt.
+- **Cmd + ` on macOS / Win + ` on Windows**: open search directly.
+- Search accepts Chinese input methods. Enter during composition confirms text instead of switching windows.
+- Escape cancels. Click a card to switch. Minimized windows are restored.
 
----
+Both shortcuts are configurable. Desktop and display scopes are independent. Cross-desktop navigation follows a window to its existing desktop; it never moves the window.
 
-## Background & Motivation
+## Status and systems
 
-Typical scenarios:
-- Quickly switch focus across multiple monitors
-- Generate hints anywhere on the screen, not just on clickable elements
-- Support for advanced interactions: long-press, combo keys, arrow keys, scrolling, dragging, etc.
+Version 0.1.0 has local macOS app/DMG and Windows EXE/NSIS builds. macOS native validation includes 100 repeated round trips, two displays, multiple Spaces, same-title windows, closed targets and WeType Chinese input; Windows runtime acceptance is pending an accessible test machine. These are development distributions: macOS is ad-hoc signed and not notarized; Windows is unsigned. See [validation](docs/validation.md) for the evidence and remaining checks.
 
----
+- macOS 14+ (Apple Silicon built locally; Intel remains unverified). Accessibility enables enumeration/focus; Input Monitoring enables keyboard capture; Screen Recording enables previews.
+- Windows 11 24H2, build 26100.2605+, is the initial cross-desktop target of the pinned `winvd` adapter. Other Windows versions must be verified before expanding support. Public desktop membership and ordinary window switching are separate from the version-sensitive desktop switching API.
+- Windows DWM renders live previews, with title/application placeholders for unavailable or protected windows. macOS uses ScreenCaptureKit.
+- System security screens, other users' sessions, and protected/elevated windows that deny focus are outside guaranteed control.
 
-## Key Features
+Window metadata, settings and previews are processed locally. Preview pixels are cached only in memory. No analytics, network search, or screenshot upload is included.
 
-- 🖥️ Global hint navigation across multiple monitors
-- 🟦 Hints can appear in blank areas, not just on clickable elements
-- ⌨️ Rich keyboard interactions: long-press, combos, arrow keys, scroll, drag, etc.
-- 🛠️ Fully configurable hint styles, types, and behaviors
-- 🪟 Window occlusion detection for smarter hint ordering
-- 🏁 One-click launch, tray management, auto-start on boot
-- 🌐 17 languages with automatic system detection, saved language selection and Arabic RTL
-- 🧩 High performance: Tauri + React + Rust
+## Development
 
-The app and [website](https://alvinfunborn.github.io/screen-buoy/) support the same languages. Change the app language at the top of Settings; choose **Follow system** to use your OS language. See [internationalization](docs/internationalization.md) for locale details and contributions.
+Prerequisites: Node.js 20+, stable Rust, and the [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/). macOS additionally requires full Xcode with the Swift compiler and a macOS 14+ SDK. Windows requires Visual Studio C++ build tools and WebView2.
 
-## Demo
-
-- **Multi-monitor hint navigation**
-  ![image](./docs/hints.png)
-
-- **Move hints**
-  ![image](./docs/move.gif)
-
-- **Advanced interactions**
-  - Right click
-    ![image](./docs/right_click.gif)
-  - Double click
-    ![image](./docs/double_click.gif)
-  - Scroll
-    ![image](./docs/scroll.gif)
-  - Drag
-    ![image](./docs/drag.gif)
-
-- **Start advanced interaction at cursor without hint**
-  ![image](./docs/space.gif)
-
----
-
-## How It Works
-
-Screen Buoy uses platform-native accessibility APIs to enumerate and interact with all UI controls (buttons, textboxes, windows, menus, etc.) across processes and windows.
-
-#### Windows
-
-Uses **Windows UI Automation** — the official Microsoft API:
-
-- Calls UI Automation COM interfaces via the Rust `windows` crate to enumerate all desktop windows and controls
-- Retrieves each control's type (ControlType), name, visibility, interactivity, screen coordinates, window z-order, etc.
-- Uses global keyboard hooks (`SetWindowsHookEx`) to capture and filter keystrokes
-
-#### macOS
-
-Uses **macOS Accessibility API** and **Core Graphics**:
-
-- Calls the Accessibility API (`AXUIElement`) to enumerate windows and UI controls for each application
-- Maps AX roles (e.g. `AXButton`, `AXTextField`) to a unified control type system shared with Windows
-- Uses Core Graphics event taps (`CGEventTapCreate`) for global keyboard monitoring
-- Requires **Accessibility**; if keyboard capture is unavailable, also allow **Input Monitoring**. Settings shows permission status and recovery actions.
-
-#### Shared
-
-- Applies custom control type mapping and filtering rules to generate hint candidates
-- Supports multi-monitor, multi-window, and occlusion detection
-- Passes control and hint data to the frontend/overlay for rendering and interaction
-
----
-
-## Installation & Usage
-
-#### Method 1: Download (Recommended)
-
-**Windows:**
-
-1. Go to the [Releases page](https://github.com/alvinfunborn/screen-buoy/releases) and download the latest `ScreenBuoy.exe` and `config.toml`.
-2. Place both files in the same directory.
-3. Double-click `ScreenBuoy.exe` to launch. The ScreenBuoy tray icon will appear.
-4. To customize, edit `config.toml` in the same directory and restart the program.
-
-**macOS:**
-
-1. Download `screen-buoy-macos.zip` from [Releases](https://github.com/alvinfunborn/screen-buoy/releases), extract it, and move `screen-buoy.app` to Applications.
-2. **Starting with 1.2.1**: release builds include Apple Silicon and Intel architectures. First launch creates `~/Library/Application Support/com.screen-buoy.dev/config_macos.toml` and preserves existing preferences. Version 1.2.0 is arm64-only and still needs `config_macos.toml` beside the app.
-3. Community builds use an ad-hoc signature and are not yet Developer ID signed or notarized. After verifying the download source, if Gatekeeper blocks launch, remove only this app's quarantine attribute:
-   ```bash
-   xattr -dr com.apple.quarantine /Applications/screen-buoy.app
-   ```
-4. If permissions are missing, Settings shows their status and links to System Settings. Allow Accessibility; if keyboard capture is still unavailable, also allow Input Monitoring. Grant access to the copy shown in the UI. Replacing the app may require re-adding its permission entry and restarting.
-5. Open Settings from the menu bar icon's menu. Press **Option+H** for hints; the mouse pointer remains visible.
-
-Download published builds from [Releases](https://github.com/alvinfunborn/screen-buoy/releases). See the [macOS release guide](docs/macos-release.md) and [validation matrix](docs/macos-validation.md).
-
-- **Tray / Menu bar icon**: Use the menu to open Settings (Windows also supports double-click)
-- **Auto-start**: Can be enabled in settings
-- **Configuration**: See `config.toml`
-
-#### Method 2: Build from Source
-
-```bash
-# Clone the repository
-git clone https://github.com/alvinfunborn/screen-buoy.git
-cd screen-buoy
-
-# Install dependencies
-npm install
-
-# Build the Tauri backend
-cd src-tauri
-cargo build
-
-# Start in development mode
-cd ..
-npm run tauri dev
-
-# Build the release version
-npm run tauri build
+```sh
+npm ci
+npm run tauri:dev
 ```
 
-- **Tray icon**: Double-click to open settings
-- **Auto-start**: Can be enabled in settings
-- **Configuration**: See `src-tauri/config.toml`
-
----
-
-## Default Key Bindings
-
-- When running:
-  - `Alt+H`: Show hints
-- When hints are visible:
-  - `Esc`: Exit
-  - Short press `HintKey`: Left click at hint and exit
-  - Long press `HintKey`: Enter Hold mode at hint
-  - Short press `Space`: Left click at cursor and exit
-  - Long press `Space`: Enter Hold mode at cursor
-  - Arrow keys: Move hints and cursor
-- In Hold mode:
-  - `Esc`: Exit hint mode
-  - `LShift`: Left click
-  - `HintLeftKey`: Hover at the hint and exit without clicking
-  - `Enter`: Double click
-  - `RShift`: Right click
-  - `HintRightKey`: Right click and exit
-  - Arrow keys: Drag
-  - `ESDF`/`IJKL`: Scroll
-
----
-
-## Advanced Configuration
-
-#### 1. HintKey, HintRightKey, HintLeftKey
-
-- **HintKey**: The main hint trigger key (usually the last character of the hint), used to activate, move to, or left-click at the hint.
-- **HintRightKey**: When held with HintKey, triggers right-click or other extended actions.
-- **HintLeftKey**: While holding HintKey, press its left neighbor to hover at the hint and exit without clicking. For example, for `FK`, hold `K` and press `J`. No minimum hold duration is required.
-
-All these keys can be customized in the `keybinding` section.
-
-The hover action is configurable under At Hint Keybindings. Older configurations using only `HintLeftKey` for click-and-exit adopt this new default on load; customized bindings and explicit hover settings are preserved.
-
-#### 2. Keyboard Configuration
-
-- **propagation_modifier**: Modifier keys that are passed through when hints are active.
-- **available_key**: All available keys and their key codes for custom binding.
-- **map_left_right**: Define left/right mapping for certain keys for flexible combos.
-
-> **Note:** Windows and macOS use separate config files (`config.toml` and `config_macos.toml`). macOS uses native key names: `LCmd`/`RCmd` (Command), `LOption`/`ROption` (Option), `LControl`/`RControl` (Control).
-
-On macOS, keycodes are native decimal values: Return/Enter = 36, Tab = 48, Space = 49; Left/Right/Down/Up = 123/124/125/126. HintKey and its side keys are dynamic references with no fixed keycode.
-
-Example (Windows `config.toml`):
-```toml
-[keyboard]
-propagation_modifier = ["LCtrl", "RCtrl", "LAlt", "RAlt", "LWin"]
-
-[keyboard.available_key]
-Back = 8
-Tab = 9
-LWin = 91
-...
-
-[keyboard.map_left_right.K]
-right = "L"
+```sh
+npm run build
+npm test
+npx playwright install chromium
+npm run test:ui
+npm run check:version
+npm run tauri -- build
 ```
 
-#### 3. Keybinding Configuration
+For UI-only preview, run `npm run dev` and open `http://127.0.0.1:1437/?preview=1`; the switcher is at `/?preview=1&view=switcher`. Preview mode exists only in the development server and uses labeled fixtures. It does not control real windows.
 
-**keybinding** defines all shortcut bindings for Screen Buoy operations. You can flexibly configure behaviors for different scenarios.
+The project keeps its own application identity (`com.beaconhop.app`) and configuration, separate from Screen Buoy. Set `BEACONHOP_DATA_DIR` to an isolated directory for native tests. Settings can be inspected in the app's System & access → Diagnostics section.
 
-###### Hold At Hint
+## Architecture
 
-**Hold At Hint** is a core interaction:
-After entering a hint, long-pressing the HintKey (the last character of the hint) enters Hold mode, allowing advanced actions (drag, scroll, right-click, etc.) at the hint.
-You can also long-press Space (or other custom keys) to enter Hold mode at the current cursor position.
-All entry methods for Hold mode can be customized via the `hold_at_hint` setting.
+- `src-tauri/src/engine.rs`: platform-independent selection, stable hints, MRU, scopes, key release ownership, and search.
+- `src-tauri/src/input/`: dedicated native keyboard hook threads. They enqueue actions, without enumeration or screenshot work.
+- `src-tauri/src/platform/`: OS adapters and exact foreground validation.
+- `src-tauri/native/BeaconBridge.swift`: macOS Accessibility, Space membership, ScreenCaptureKit, and panel bridge.
+- `src-tauri/src/runtime.rs`: asynchronous inventory, presentation, activation, settings, and bounded preview cache.
+- `src/`: shared settings and switcher UI, English / 简体中文, dark / light themes.
 
-In Hold mode, **Move pointer** adjusts the mouse position (hints follow), **Drag** moves with the left mouse button held, and **Scroll** scrolls content under the pointer. Arrow keys default to dragging in this mode; pointer movement starts unbound. Before selecting a hint, arrows move the hints and pointer.
+The product abstraction is **work navigation**. Browser tabs, saved work contexts, remote sessions, gaze input and cross-device navigation are future extensions, not implemented features of this window release.
 
-###### Structure
+## License and attribution
 
-- **global**: Shortcuts when no hint is selected (e.g., show hint, exit, enter Hold mode, etc.)
-- **at_hint**: Shortcuts in Hold mode (e.g., left click, right click, double click, drag, scroll, etc.)
-
-Example:
-```toml
-[keybinding.global]
-move_to_hint = ["HintKey"]
-exit = ["Esc"]
-hold_at_hint = ["HintKey", "Space"]
-
-[keybinding.at_hint]
-left_click = ["LShift"]
-right_click_exit = ["RShift", "HintRightKey"]
-double_click = ["Enter"]
-```
-You can add, remove, or modify these bindings as needed for a personalized experience.
-
-#### 4. Hint Grid Configuration
-
-- **rows/columns**: Number of grid rows and columns.
-- **show_at_rows/show_at_columns**: Which rows/columns to show hints in.
-- **hint_type**: The type of hint for this grid (links to style/behavior).
-
-Example:
-```toml
-[hint.grid]
-rows = 4
-columns = 5
-show_at_rows = [1, 2, 3, 4]
-show_at_columns = [1, 2, 3, 4, 5]
-hint_type = "default"
-```
-
-#### 5. Hint Style Configuration
-
-- **style**: Custom CSS for each hint type (background, font, border, etc.)
-- **z_index**: Layer order for different hint types
-- **element_control_types** (Windows): UI Automation control type IDs.
-- **element_ax_roles** (macOS): Native accessibility roles, selected directly in settings. For example, `tab` matches `AXTabGroup`/`AXTabButton`/`AXTab`, and `text` matches text fields and `AXStaticText`. Empty lists can still provide a style for grid hints.
-
-Legacy Mac defaults adopt the native groups on load. Customized numeric mappings retain their original role assignments, colors, and layer order. Saving persists the native lists; clearing a list disables matching for that group.
-
-Example (Windows):
-```toml
-[hint.types.button]
-style = """
-{
-  background-color: rgba(122, 164, 243, 1);
-  color: #111111;
-  font-size: 11px;
-}
-"""
-z_index = 4
-element_control_types = [50021, 50026, ...]
-```
-
----
-
-## Hint Character Order
-
-Each row in `hint.charsets` supplies one character position. Put familiar,
-easy-to-press characters first in each row. Hints first use combinations of the
-earliest characters, then gradually include later characters. Within each stage,
-different first characters are interleaved whenever possible. For rows `A S D`
-and `J K L`, the order is `AJ | SJ AK SK | DJ AL DK SL DL`.
-
-All main combinations are used before adding a prefix from `charset_extra`
-(normally all two-character hints before any three-character hints). The longer
-codes expand their prefixes and following characters together by the same rule.
-Order the extra prefixes from easiest to hardest as well. Codes already visible
-in a hint session stay fixed when more hints arrive. Interleaving reduces runs
-of matching prefixes; it does not guarantee that nearby labels never overlap.
-
-The defaults keep 28 characters per position: the first position starts with
-`F J D K`, while the final position starts with `D K S L` for holding a hint and
-using its neighboring keys. Digits come last. `I`, `0`, `1`, `5`, and `8` stay
-excluded for readability. Extra prefixes are `A Q Z ; -`; they must not
-overlap the first-position character set. Capacity remains 784 two-character
-hints and 4,704 hints in total.
-
-## Performance
-
-Screen Buoy is designed for low resource usage while maintaining responsive hint generation.
-- **Memory usage**: Typically 50~120MB RAM, depending on monitor count and number of UI elements on screen.
-- **CPU usage**: Idle CPU usage is usually less than 1%. UI element scanning runs every 100ms by default to ensure hints stay up-to-date after window/screen switches, which may cause brief spikes on desktops with many controls (e.g., IDEs, browsers with many tabs).
-- **Startup time**: Less than 1 second on most modern systems.
-- **Background threads**: A few lightweight threads for UI element collection and keyboard/mouse event hooks.
-
-Screen Buoy is suitable for always-on use on multi-monitor setups.
-
----
-
-## Platform Requirements
-
-| | Windows | macOS |
-|---|---|---|
-| **OS version** | Windows 10+ | macOS 10.15+ |
-| **Permissions** | Standard user | Accessibility + Input Monitoring |
-| **Auto-start** | Registry | LaunchAgent |
-| **Tray** | System tray icon | Menu bar icon |
-| **UI element detection** | UI Automation (COM) | Accessibility API (AXUIElement) |
-| **Keyboard hook** | SetWindowsHookEx | CGEventTap |
-| **Key codes** | Virtual Key Codes | CGKeyCodes |
-
----
-
-## Security
-
-Screen Buoy is open source and has passed multiple security checks:
-- **No network upload**: The application does not upload any user data or telemetry.
-- **No backdoors or malicious code**: All source code is available for audit.
-- **Antivirus scan** (Windows): The official release binary has been scanned by Windows Defender, Kaspersky, and Virustotal, with no threats detected.
-- **Permissions**: Windows requires standard user privileges only. macOS requires Accessibility and Input Monitoring permissions — these are used solely for reading UI element positions and capturing keyboard events.
-
-[Virustotal scan report (Windows)](https://www.virustotal.com/gui/file/9e29999b238e0d2b9f5e39affc1e5e7b41ff1008be3e2dfa4a3982071390dae1/detection)
-
-You can verify the binary with any mainstream antivirus or use the source code to build your own trusted version.
-
----
-
-## Appendix
-
-- [Windows Virtual Key Codes](https://docs.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes)
-- [macOS CGKeyCode Reference (Events.h)](https://github.com/nicklockwood/iVersion/blob/master/Examples/Mac/iVersionMac/Events.h)
-- [Windows UI Automation Element Control Types Ids](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-controltype-ids)
-- [macOS Accessibility Roles](https://developer.apple.com/documentation/appkit/nsaccessibility/role)
-
----
-
-## References
-
-- [Fluent Search](https://www.fluentsearch.net/)
-- [mousemaster](https://github.com/petoncle/mousemaster)
+MIT. Original Screen Buoy copyright is preserved in [LICENSE](LICENSE). This fork began at Screen Buoy commit `045a5f0`; upstream remains read-only, with pushes disabled. The original working tree was not modified. BeaconHop branding, interaction engine, window adapters and interface are maintained independently.

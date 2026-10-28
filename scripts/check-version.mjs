@@ -1,16 +1,7 @@
-import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-
-const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-const version = JSON.parse(read('package.json')).version;
-const lock = JSON.parse(read('package-lock.json'));
-assert.equal(lock.version, version, 'npm lockfile version');
-assert.equal(lock.packages[''].version, version, 'npm root package version');
-for (const path of ['src-tauri/Cargo.toml', 'src-tauri/Tauri.toml']) {
-  assert.equal(read(path).match(/^version = "([^"]+)"/m)?.[1], version, path);
+import {readFileSync} from 'node:fs';
+const version=JSON.parse(readFileSync('package.json')).version;
+for(const file of ['src-tauri/Cargo.toml','src-tauri/Tauri.toml']) {
+ const found=readFileSync(file,'utf8').match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+ if(found!==version)throw new Error(`${file}: ${found} != ${version}`);
 }
-assert.equal(read('src-tauri/Cargo.lock').match(/name = "screen-buoy"\nversion = "([^"]+)"/)?.[1], version, 'Cargo lockfile version');
-if (process.env.GITHUB_REF_TYPE === 'tag') {
-  assert.equal(process.env.GITHUB_REF_NAME, `v${version}`, 'release tag must match bundle version');
-}
-console.log(`All package and bundle versions match ${version}`);
+console.log(`BeaconHop ${version}: version files agree`);

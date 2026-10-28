@@ -1,0 +1,54 @@
+export type Config = {
+  holdShortcut: string;
+  searchShortcut: string;
+  holdEnabled: boolean;
+  desktopScope: "current" | "all";
+  displayScope: "current" | "all";
+  includeMinimized: boolean;
+  includeHidden: boolean;
+  hintAlphabet: string;
+  thumbnails: boolean;
+  layout: "grid" | "list";
+  theme: "system" | "dark" | "light";
+  language: "system" | "zh" | "en";
+  startAtLogin: boolean;
+  startInTray: boolean;
+  excludedApps: string[];
+};
+export type Destination = {
+  id: string;
+  nativeId: number;
+  pid: number;
+  title: string;
+  appName: string;
+  appId: string;
+  displayId: string;
+  desktopId: string;
+  desktopName: string;
+  currentDesktop: boolean | null;
+  minimized: boolean;
+  hidden: boolean;
+  icon: string | null;
+  hint: string;
+};
+export type Session = {
+  sessionId: number;
+  revision: number;
+  mode: "inactive" | "held" | "search";
+  windows: Destination[];
+  resultIds: string[];
+  selected: string | null;
+  prefix: string;
+  query: string;
+  error: string | null;
+  warnings: string[];
+};
+export type Permissions = {
+  required: boolean;
+  accessibility: boolean;
+  inputMonitoring: boolean;
+  screenRecording: boolean;
+  keyboardHook: boolean;
+  ready: boolean;
+  appPath: string;
+};
