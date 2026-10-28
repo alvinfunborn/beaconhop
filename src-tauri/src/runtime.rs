@@ -346,6 +346,7 @@ pub fn save_settings(config: Config) -> Result<Config, String> {
     e.config = config.clone();
     *rt().config_warning.lock().unwrap() = None;
     drop(e);
+    crate::update_tray_language(&rt().app, &config.language);
     let _ = rt().app.emit("settings", &config);
     Ok(config)
 }

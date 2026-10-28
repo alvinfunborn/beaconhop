@@ -81,6 +81,12 @@ Validation: 23 Rust tests passed, including ANSI/ISO key mapping and usage order
 
 At installation readback, the replacement executable again reported Accessibility false and keyboard hook false; the existing development signature does not preserve TCC approval across these rebuilds. No OS grant was changed by automation. A controlled native probe confirmed BeaconHop was foreground before Cmd+backquote, then uTools became foreground; no recording-completion feedback arrived while BeaconHop lacked its hook. Global-shortcut, actual-window MRU and thumbnail-grid acceptance on this replacement remain dependent on the user reauthorizing Accessibility and Screen Recording. The older extended native switching results above are historical, not a rerun of this build.
 
+## Minimal tray menu follow-up
+
+The tray context menu now contains only Open Settings, Restart and Quit, in that order, matching Screen Buoy. Labels follow the configured English/Chinese preference or the system locale and refresh after saving language settings. Restart requests the normal Tauri exit lifecycle so native input cleanup runs before relaunch.
+
+The optimized macOS app and DMG rebuilt successfully, the Windows MSVC cross-check passed, and formatting/whitespace checks passed. The staged app signature and DMG checksum were verified. The installed executable matches the package; all settings remained unchanged through installation, restart and quit. Native right-click probes read exactly `打开设置`, `重启`, `退出`; Restart replaced PID 95272 with 96178, Quit left zero installed instances, and Open Settings reopened the settings window after closing it. The settings window was confirmed on screen; foreground focus was not accepted because the subsequent readback showed Edge active. BeaconHop was relaunched and left running. Evidence: `logs/macos-tray-install.json`.
+
 ## Remaining acceptance
 
 **Windows native execution is pending an accessible Windows machine or VM.** Compilation and installer generation do not prove hook interception, DWM preview composition, focus transfer, virtual desktop compatibility, high DPI behavior or installation. Initial desktop-switching support follows `winvd` 0.0.49: Windows 11 24H2 build 26100.2605 or later (upstream also reports testing 25H2 build 26200.8117). Older Windows versions are not accepted targets yet.

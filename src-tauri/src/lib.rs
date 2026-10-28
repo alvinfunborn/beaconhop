@@ -11,7 +11,32 @@ mod runtime;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
+    Manager,
 };
+
+struct TrayMenuLabels([MenuItem<tauri::Wry>; 3]);
+
+fn tray_labels(language: &str) -> [&'static str; 3] {
+    let zh = language == "zh"
+        || (language == "system"
+            && sys_locale::get_locale().is_some_and(|locale| locale.starts_with("zh")));
+    if zh {
+        ["打开设置", "重启", "退出"]
+    } else {
+        ["Open Settings", "Restart", "Quit"]
+    }
+}
+
+pub(crate) fn update_tray_language(app: &tauri::AppHandle, language: &str) {
+    if let Some(menu) = app.try_state::<TrayMenuLabels>() {
+        for (item, label) in menu.0.iter().zip(tray_labels(language)) {
+            if let Err(error) = item.set_text(label) {
+                log::warn!("Could not update tray label: {error}");
+            }
+        }
+    }
+}
+
 pub fn run() {
     let _ = logger::init_logger("info".into());
     let app = tauri::Builder::default()
@@ -41,10 +66,12 @@ pub fn run() {
         ])
         .setup(|app| {
             runtime::init(app.handle().clone())?;
-            let search = MenuItem::with_id(app, "search", "Search windows", true, None::<&str>)?;
-            let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit BeaconHop", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&search, &settings, &quit])?;
+            let [settings_label, restart_label, quit_label] =
+                tray_labels(&runtime::get_settings().language);
+            let settings = MenuItem::with_id(app, "settings", settings_label, true, None::<&str>)?;
+            let restart = MenuItem::with_id(app, "restart", restart_label, true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", quit_label, true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&settings, &restart, &quit])?;
             #[cfg(target_os = "macos")]
             let tray_icon =
                 tauri::image::Image::from_bytes(include_bytes!("../icons/tray_icon.png"))?;
@@ -56,14 +83,13 @@ pub fn run() {
                 .tooltip("BeaconHop")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "search" => {
-                        runtime::open_search_inner();
-                    }
                     "settings" => runtime::show_settings(app),
+                    "restart" => app.request_restart(),
                     "quit" => app.exit(0),
                     _ => {}
                 })
                 .build(app)?;
+            app.manage(TrayMenuLabels([settings, restart, quit]));
             input::init(app.handle().clone());
             Ok(())
         })
