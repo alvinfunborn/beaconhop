@@ -116,7 +116,7 @@ test("shortcut recording accepts Win+backquote, repeats the current value and re
   await search.press("Meta+Digit7");
   await expect(search).toContainText("7");
   await page.getByRole("button", { name: "Save changes" }).click();
-  await page.getByRole("button", { name: "Restore default" }).click();
+  await page.getByRole("button", { name: "Restore default Search shortcut", exact: true }).click();
   await expect(search).toContainText("`");
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Settings saved" })).toBeVisible();
@@ -178,3 +178,71 @@ for (const count of [6, 24, 80]) {
     }).toPass();
   });
 }
+
+test("both shortcut editors record punctuation, allow manual input and restore independently", async ({ page }) => {
+  await page.goto("/?preview=1");
+  const hold = page.getByRole("button", { name: "Hold shortcut", exact: true });
+  const search = page.getByRole("button", { name: "Search shortcut", exact: true });
+  await expect(page.getByRole("button", { name: /^Restore default / })).toHaveCount(2);
+  await expect(page.getByRole("button", { name: /^Enter .* manually$/ })).toHaveCount(2);
+  await search.click();
+  await search.press("Meta+Backslash");
+  await expect(search).toHaveText(/\\/);
+  await expect(search).toHaveAttribute("aria-pressed", "false");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  let settings = await page.evaluate(async () => (await import("/src/api.ts" as string)).call("get_settings"));
+  expect(settings.searchShortcut).toBe("Super+Backslash");
+  await page.getByRole("button", { name: "Enter Search shortcut manually", exact: true }).click();
+  const text = page.getByRole("textbox", { name: "Search shortcut text", exact: true });
+  await text.fill("Win + `");
+  await text.press("Enter");
+  await expect(search).toContainText("`");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  settings = await page.evaluate(async () => (await import("/src/api.ts" as string)).call("get_settings"));
+  expect(settings.searchShortcut).toBe("Super+Backquote");
+  await page.getByRole("button", { name: "Enter Hold shortcut manually", exact: true }).click();
+  await page.getByRole("textbox", { name: "Hold shortcut text", exact: true }).fill("Ctrl + \\");
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect(hold).toHaveText(/Ctrl.*\\/);
+  await page.getByRole("button", { name: "Restore default Hold shortcut", exact: true }).click();
+  await expect(hold).toContainText("Tab");
+  await expect(search).toContainText("`");
+  await page.getByRole("button", { name: "Enter Search shortcut manually", exact: true }).click();
+  await text.fill("Win + Unsupported");
+  await text.press("Enter");
+  await expect(text).toBeVisible();
+  await expect(page.getByText(/Use a modifier and key/)).toBeVisible();
+  await text.press("Escape");
+  await expect(text).toHaveCount(0);
+  await expect(search).toContainText("`");
+});
+
+test("missing access opens setup, stays visible on other pages and refreshes after granting", async ({ page }) => {
+  await page.route("**/src/api.ts", async route => {
+    const response = await route.fetch();
+    const body = (await response.text())
+      .replace(/accessibility:\s*true/, "accessibility: globalThis.__granted ?? false")
+      .replace(/keyboardHook:\s*true/, "keyboardHook: globalThis.__granted ?? false")
+      .replace(/ready:\s*true/, "ready: globalThis.__granted ?? false")
+      .replace(/screenRecording:\s*true/, "screenRecording: globalThis.__granted ?? false");
+    await route.fulfill({ response, body });
+  });
+  await page.goto("/?preview=1");
+  const setup = page.getByRole("region", { name: "Finish setting up BeaconHop" });
+  await expect(setup).toBeVisible();
+  await expect(page.getByRole("button", { name: "System & access", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(setup.getByRole("button", { name: "Open Accessibility settings", exact: true })).toBeInViewport();
+  await page.screenshot({ path: "logs/permission-startup.png" });
+  await page.getByRole("button", { name: "Shortcuts", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Allow access to start switching windows");
+  await page.getByRole("button", { name: "Enter Search shortcut manually", exact: true }).click();
+  await page.getByRole("textbox", { name: "Search shortcut text", exact: true }).fill("Win + \\");
+  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText("Settings saved", { exact: true })).toBeVisible();
+  await page.screenshot({ path: "logs/shortcut-manual-no-access.png" });
+  await page.evaluate(() => { (window as any).__granted = true; window.dispatchEvent(new Event("focus")); });
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.locator(".sidebar-bottom")).toContainText("Ready to hop");
+  await expect(page.getByRole("button", { name: "Shortcuts", exact: true })).toHaveAttribute("aria-current", "page");
+});

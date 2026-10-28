@@ -10,8 +10,28 @@ function shortcut(s: string) {
     .replace("Super", isMac ? "⌘" : "Win")
     .replace("Alt", isMac ? "⌥" : "Alt")
     .replace("Backquote", "`")
+    .replace("Backslash", "\\")
     .replace("Control", isMac ? "⌃" : "Ctrl")
     .replaceAll("+", " + ");
+}
+function parseShortcutText(text: string): string | null {
+  const parts = text.trim().replace(/[⌘⌥⌃⇧]\s*\+?\s*/g, (s) => ({ "⌘": "Super+", "⌥": "Alt+", "⌃": "Ctrl+", "⇧": "Shift+" })[s[0]]!).split("+").map((s) => s.trim());
+  const modifiers = new Set<string>();
+  let key = "";
+  for (const part of parts) {
+    const token = part.toLowerCase();
+    const modifier = ({ alt: "Alt", option: "Alt", ctrl: "Ctrl", control: "Ctrl", super: "Super", cmd: "Super", command: "Super", win: "Super", meta: "Super", shift: "Shift" } as Record<string, string>)[token];
+    if (modifier) {
+      if (modifiers.has(modifier)) return null;
+      modifiers.add(modifier);
+    } else {
+      if (key) return null;
+      key = ({ tab: "Tab", space: "Space", backquote: "Backquote", "`": "Backquote", backslash: "Backslash", "\\": "Backslash" } as Record<string, string>)[token] || (/^[a-z0-9]$/i.test(part) ? part.toUpperCase() : "");
+      if (!key) return null;
+    }
+  }
+  if (!key || !["Ctrl", "Alt", "Super"].some((m) => modifiers.has(m))) return null;
+  return [...["Ctrl", "Alt", "Super", "Shift"].filter((m) => modifiers.has(m)), key].join("+");
 }
 function useSettings() {
   const [config, setConfig] = useState<Config>(defaults);
@@ -66,6 +86,7 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [diagnostics, setDiagnostics] = useState("");
+  const checkedStartupPermissions = useRef(false);
   useEffect(() => setDraft(initial), [initial]);
   useEffect(() => {
     let alive = true;
@@ -82,6 +103,24 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
       window.removeEventListener("focus", refresh);
     };
   }, []);
+  useEffect(() => {
+    if (!permissions || checkedStartupPermissions.current) return;
+    if (!permissions.required || permissions.ready) {
+      checkedStartupPermissions.current = true;
+      return;
+    }
+    const show = () => { checkedStartupPermissions.current = true; setTab("system"); };
+    if (!permissions.accessibility) { show(); return; }
+    const timer = setTimeout(show, 2000);
+    return () => clearTimeout(timer);
+  }, [permissions?.required, permissions?.ready, permissions?.accessibility]);
+  useEffect(() => {
+    let disposed = false;
+    const off = subscribe("show-permissions", () => { if (!disposed) setTab("system"); });
+    return () => { disposed = true; void off.then((f) => f()); };
+  }, []);
+  const needsAccess = permissions?.required && !permissions.ready;
+  const needsPreviews = permissions?.required && draft.thumbnails && !permissions.screenRecording;
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
   function change<K extends keyof Config>(key: K, value: Config[K]) {
     setDraft((d) => ({ ...d, [key]: value }));
@@ -209,11 +248,14 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
           {tabs.map(([id, icon, label]) => (
             <button
               key={id}
+              aria-label={label}
               className={tab === id ? "active" : ""}
+              aria-current={tab === id ? "page" : undefined}
               onClick={() => setTab(id)}
             >
               <span aria-hidden="true">{icon}</span>
               {label}
+              {id === "system" && (needsAccess || needsPreviews) && <span className="permission-nav-dot" aria-label={t("Access needed", "需要授权")} />}
             </button>
           ))}
         </nav>
@@ -244,6 +286,11 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
           </button>
         </header>
         <div className="settings-scroll">
+          {tab !== "system" && (needsAccess || needsPreviews) && <div className="permission-banner" role="alert">
+            <div><strong>{needsAccess ? t("Allow access to start switching windows", "先完成授权，才能切换窗口") : t("Allow Screen Recording to see window previews", "开启屏幕录制，才能显示窗口缩略图")}</strong>
+              <p>{needsAccess ? t("Global shortcuts are unavailable. You can still edit and save settings.", "当前全局快捷键不可用，仍可编辑和保存设置。") : t("Window switching is ready; previews still need access.", "窗口切换已就绪，缩略图还需要授权。")}</p></div>
+            <button className="button secondary" onClick={() => setTab("system")}>{t("Set up access", "前往授权")}</button>
+          </div>}
           {tab === "general" && (
             <>
               <div className="hero">
@@ -290,6 +337,7 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                     onChange={(v) => change("holdShortcut", v)}
                     label={t("Hold shortcut", "按住模式快捷键")}
                     zh={zh}
+                    defaultValue={defaults.holdShortcut}
                   />
                 </Setting>
                 <Setting
@@ -304,7 +352,7 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                     onChange={(v) => change("searchShortcut", v)}
                     label={t("Search shortcut", "搜索模式快捷键")}
                     zh={zh}
-                    defaultValue="Super+Backquote"
+                    defaultValue={defaults.searchShortcut}
                   />
                 </Setting>
                 <div className="tip">
@@ -490,6 +538,19 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
           )}
           {tab === "system" && (
             <>
+              {permissions?.required && (needsAccess || needsPreviews) && <section className="permission-setup" role="region" aria-label={t("Finish setting up BeaconHop", "完成 BeaconHop 授权")}>
+                <div className="eyebrow">{t("SETUP REQUIRED", "需要完成授权")}</div>
+                <h2>{!permissions.accessibility ? t("Enable Accessibility to start hopping", "先开启辅助功能，开始切换窗口") : !permissions.keyboardHook ? t("Accessibility is allowed. Connect the keyboard listener.", "辅助功能已授权，键盘监听尚未连接") : t("One more step for window previews", "再开启屏幕录制，显示窗口缩略图")}</h2>
+                <p>{!permissions.accessibility ? t("Open System Settings, enable BeaconHop under Privacy & Security → Accessibility, then return here. The status refreshes automatically.", "打开系统设置，在「隐私与安全性 → 辅助功能」开启 BeaconHop，再返回这里，状态会自动更新。") : !permissions.keyboardHook ? t("Wait briefly for the listener. If it stays disconnected, restart BeaconHop.", "请稍候等待连接；如果仍未就绪，重启 BeaconHop。") : t("Screen Recording is used for thumbnails. You can switch windows without granting it.", "屏幕录制用于生成缩略图；暂不授权也可以切换窗口。")}</p>
+                <div className="permission-steps"><span className={permissions.accessibility ? "done" : ""}>1 · {t("Accessibility · Required", "辅助功能 · 必需")}</span><span className={permissions.keyboardHook ? "done" : ""}>2 · {t("Keyboard listener", "键盘监听")}</span><span className={permissions.screenRecording ? "done" : ""}>3 · {t("Screen Recording · Previews", "屏幕录制 · 缩略图")}</span></div>
+                <div className="permission-actions">
+                  {!permissions.accessibility ? <button className="button primary" disabled={pendingPermission !== null} onClick={() => requestPermission("accessibility")}>{t("Open Accessibility settings", "打开辅助功能设置")}</button>
+                    : !permissions.keyboardHook ? <button className="button primary" onClick={() => call("restart_application").catch((e) => setError(String(e)))}>{t("Restart BeaconHop", "重启 BeaconHop")}</button>
+                    : <button className="button primary" disabled={pendingPermission !== null} onClick={() => requestPermission("screen")}>{t("Enable window previews", "开启窗口缩略图")}</button>}
+                  <button className="button secondary" onClick={() => call<Permissions>("get_permissions").then(setPermissions).catch((e) => setError(String(e)))}>{t("Check again", "重新检测")}</button>
+                </div>
+                <details className="permission-troubleshooting"><summary>{t("Already enabled, but still not working?", "已经开启，仍显示未授权？")}</summary><p>{t("After an app update, remove the old BeaconHop entry from Accessibility, add this installed app again and restart.", "更新应用后，若开关已开启仍未就绪，请移除辅助功能中的旧 BeaconHop，重新添加当前应用并重启。")}</p><p className="app-path">{permissions.appPath}</p><button className="button secondary" onClick={() => call("restart_application").catch((e) => setError(String(e)))}>{t("Restart BeaconHop", "重启 BeaconHop")}</button></details>
+              </section>}
               <section>
                 <h2>{t("Make it part of your day", "随时待命")}</h2>
                 {toggle(
@@ -693,9 +754,11 @@ function Setting({
   );
 }
 function Shortcut({ value, onChange, label, zh, defaultValue }: {
-  value: string; onChange: (v: string) => void; label: string; zh: boolean; defaultValue?: string;
+  value: string; onChange: (v: string) => void; label: string; zh: boolean; defaultValue: string;
 }) {
   const [recording, setRecording] = useState(false);
+  const [manual, setManual] = useState(false);
+  const [text, setText] = useState("");
   const [feedback, setFeedback] = useState("");
   const finish = useRef((next: string) => {});
   finish.current = (next) => {
@@ -704,17 +767,23 @@ function Shortcut({ value, onChange, label, zh, defaultValue }: {
       onChange(next);
     } else setFeedback(zh ? "已取消录入" : "Recording cancelled");
     setRecording(false);
+    setManual(false);
+  };
+  const applyText = () => {
+    const next = parseShortcutText(text);
+    if (next) finish.current(next);
+    else setFeedback(zh ? "请输入修饰键 + 按键，例如 Win + ` 或 Win + \\" : "Use a modifier and key, such as Win + ` or Win + \\");
   };
   useEffect(() => {
     if (!recording) return;
     let disposed = false;
     let off = () => {};
-    // Install the completion listener before enabling the native recorder.
     (async () => {
       off = await subscribe<string>("shortcut-recorded", (next) => finish.current(next));
       if (disposed) { off(); return; }
-      await call("record_shortcut", { enabled: true });
-      if (disposed) await call("record_shortcut", { enabled: false });
+      const ready = await call<boolean>("record_shortcut", { enabled: true });
+      if (disposed) { await call("record_shortcut", { enabled: false }); return; }
+      if (native && !ready) setFeedback(zh ? "辅助功能尚未就绪；若按键被系统或其他应用接走，请使用手动输入。" : "Accessibility is not ready. Use manual entry if another app or macOS intercepts the keys.");
     })().catch((e) => { if (!disposed) { setFeedback(String(e)); setRecording(false); } });
     return () => {
       disposed = true;
@@ -727,7 +796,7 @@ function Shortcut({ value, onChange, label, zh, defaultValue }: {
       className={"shortcut " + (recording ? "recording" : "")}
       aria-label={label}
       aria-pressed={recording}
-      onClick={() => { setFeedback(""); setRecording(true); }}
+      onClick={() => { setManual(false); setFeedback(""); setRecording(true); }}
       onBlur={() => setRecording(false)}
       onKeyDown={(e) => {
         if (!recording) return;
@@ -735,15 +804,25 @@ function Shortcut({ value, onChange, label, zh, defaultValue }: {
         e.stopPropagation();
         if (e.repeat) return;
         if (e.key === "Escape") { finish.current(""); return; }
+        if (["Control", "Alt", "Meta", "Shift"].includes(e.key)) return;
         const modifiers = [e.ctrlKey ? "Ctrl" : "", e.altKey ? "Alt" : "", e.metaKey ? "Super" : "", e.shiftKey ? "Shift" : ""].filter(Boolean);
-        const key = e.key === "`" || (e.code === "IntlBackslash" && e.key === "~") ? "Backquote"
+        const key = e.code === "Backquote" || (e.code === "IntlBackslash" && ["`", "~"].includes(e.key)) ? "Backquote"
           : e.code.startsWith("Key") ? e.code.slice(3) : e.code.startsWith("Digit") ? e.code.slice(5) : e.code;
-        // Also handle focused WebView events when the global hook is unavailable.
-        if (modifiers.some((m) => m !== "Shift") && (["Tab", "Space", "Backquote"].includes(key) || /^[A-Z0-9]$/.test(key)))
-          finish.current([...modifiers, key].join("+"));
+        const next = parseShortcutText([...modifiers, key].join("+"));
+        if (next) finish.current(next);
+        else setFeedback(zh ? "请同时按住 Alt、Ctrl 或 Win / ⌘，再按目标键。" : "Hold Alt, Ctrl or Win / Command with the target key.");
       }}
     >{recording ? (zh ? "请按下快捷键…" : "Press shortcut…") : shortcut(value)}</button>
-    {defaultValue && <button className="shortcut-reset" onClick={() => finish.current(defaultValue)}>{zh ? "恢复默认" : "Restore default"}</button>}
+    <button className="shortcut-reset" aria-label={zh ? `手动输入${label}` : `Enter ${label} manually`} onClick={() => { setRecording(false); setManual(true); setText(value); setFeedback(""); }}>{zh ? "手动输入" : "Enter manually"}</button>
+    <button className="shortcut-reset" aria-label={zh ? `恢复${label}默认值` : `Restore default ${label}`} onClick={() => finish.current(defaultValue)}>{zh ? "恢复默认" : "Restore default"}</button>
+    {manual && <div className="shortcut-manual">
+      <input autoFocus value={text} aria-label={zh ? `${label}文本` : `${label} text`} spellCheck={false} placeholder="Win + `" onChange={(e) => setText(e.target.value)} onKeyDown={(e) => {
+        if (e.key === "Enter") { e.preventDefault(); applyText(); }
+        if (e.key === "Escape") { e.preventDefault(); finish.current(""); }
+      }} />
+      <button className="shortcut-reset" onClick={applyText}>{zh ? "确认" : "Apply"}</button>
+      <button className="shortcut-reset" onClick={() => finish.current("")}>{zh ? "取消" : "Cancel"}</button>
+    </div>}
     <span className="shortcut-feedback" role="status">{feedback}</span>
   </div>;
 }

@@ -9,7 +9,7 @@ BeaconHop is a window navigator for macOS and Windows, adapted from [Screen Buoy
 - **Alt + Tab**: hold Alt to see windows. Tab / Shift + Tab cycle through recent windows. Release Alt to switch.
 - **Type a complete hint while holding**: immediately activate that exact window. Hints stay fixed for the invocation.
 - **Backslash (`\`)**: enter persistent search; you can release Alt.
-- **Cmd + ` on macOS / Win + ` on Windows**: open search directly. Shortcut recording includes a restore-default action and feedback when the same shortcut is entered again.
+- **Cmd + ` on macOS / Win + ` on Windows**: open search directly. Both shortcut editors include recording, manual entry, restore-default actions and same-shortcut feedback. Win + backslash is also supported.
 - Search accepts Chinese input methods. Enter during composition confirms text instead of switching windows.
 - Escape cancels. Click a card to switch. Minimized windows are restored.
 
@@ -21,10 +21,12 @@ The overview fits every matching window on screen without scrolling, keeps each 
 
 Version 0.1.0 has local macOS app/DMG and Windows EXE/NSIS builds. macOS native validation includes 100 repeated round trips, two displays, multiple Spaces, same-title windows, closed targets and WeType Chinese input; Windows runtime acceptance is pending an accessible test machine. These are development distributions: macOS is ad-hoc signed and not notarized; Windows is unsigned. See [validation](docs/validation.md) for the evidence and remaining checks.
 
-- macOS 14+ (Apple Silicon built locally; Intel remains unverified). Accessibility enables enumeration/focus; Input Monitoring enables keyboard capture; Screen Recording enables previews.
+- macOS 14+ (Apple Silicon built locally; Intel remains unverified). Accessibility enables enumeration/focus and normally the keyboard hook; Input Monitoring is a troubleshooting option when the hook remains unavailable. Screen Recording enables previews.
 - Windows 11 24H2, build 26100.2605+, is the initial cross-desktop target of the pinned `winvd` adapter. Other Windows versions must be verified before expanding support. Public desktop membership and ordinary window switching are separate from the version-sensitive desktop switching API.
 - Windows DWM renders live previews, with title/application placeholders for unavailable or protected windows. macOS uses ScreenCaptureKit.
 - System security screens, other users' sessions, and protected/elevated windows that deny focus are outside guaranteed control.
+
+On macOS, missing Accessibility opens the permission setup in the foreground at startup, including background launches. Other settings pages keep a visible access banner. Shortcut configuration can still be entered manually and saved before granting access.
 
 Window metadata, settings and previews are processed locally. Preview pixels are cached only in memory. No analytics, network search, or screenshot upload is included.
 

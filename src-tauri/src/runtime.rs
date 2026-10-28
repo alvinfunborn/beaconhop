@@ -163,7 +163,7 @@ pub fn init(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         crate::macos_access::log_executable_identity();
         crate::macos_access::log_accessibility_status();
     }
-    if show {
+    if show || (platform::permissions().required && !platform::permissions().accessibility) {
         show_settings(&app);
     }
     Ok(())
@@ -288,8 +288,13 @@ fn perform(action: Action) {
 }
 pub fn show_settings(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        if !platform::permissions().ready {
+            let _ = w.emit("show-permissions", ());
+        }
         let _ = w.show();
         let _ = w.set_focus();
+        #[cfg(target_os = "macos")]
+        platform::focus_settings(&w);
     }
 }
 pub fn open_search_inner() {
@@ -315,6 +320,10 @@ pub fn lost_focus() {
 #[tauri::command]
 pub fn get_settings() -> Config {
     rt().engine.lock().unwrap().config.clone()
+}
+#[tauri::command]
+pub fn restart_application() {
+    rt().app.request_restart();
 }
 #[tauri::command]
 pub fn save_settings(config: Config) -> Result<Config, String> {
@@ -441,8 +450,9 @@ pub fn get_diagnostics() -> serde_json::Value {
 }
 
 #[tauri::command]
-pub fn record_shortcut(enabled: bool) {
+pub fn record_shortcut(enabled: bool) -> bool {
     RECORDING.store(enabled, Ordering::Release);
+    crate::input::is_ready()
 }
 #[tauri::command]
 pub fn set_live_preview(id: String, session_id: u64, bounds: Option<Bounds>) -> bool {

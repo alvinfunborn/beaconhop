@@ -86,10 +86,15 @@ impl Shortcut {
                     "tab" => "Tab".into(),
                     "space" => "Space".into(),
                     "backquote" | "`" => "Backquote".into(),
+                    "backslash" | "\\" => "Backslash".into(),
                     p if p.len() == 1 && p.as_bytes()[0].is_ascii_alphanumeric() => {
                         p.to_ascii_uppercase()
                     }
-                    _ => return Err("Use Tab, Space, Backquote, a letter or a digit".into()),
+                    _ => {
+                        return Err(
+                            "Use Tab, Space, Backquote, Backslash, a letter or a digit".into()
+                        )
+                    }
                 });
             }
         }
@@ -180,6 +185,13 @@ mod tests {
             Shortcut::parse("Cmd+`").unwrap(),
             Shortcut::parse("Super+Backquote").unwrap()
         );
+        assert_eq!(
+            Shortcut::parse("Win+\\").unwrap(),
+            Shortcut::parse("Super+Backslash").unwrap()
+        );
+        let mut config = Config::default();
+        config.search_shortcut = "Super+Backslash".into();
+        assert!(config.validate().is_ok());
     }
     #[test]
     fn invalid_settings_never_reach_disk() {

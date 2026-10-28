@@ -257,10 +257,7 @@ pub fn init(app_handle: tauri::AppHandle) {
                     crate::macos_access::has_input_monitoring_access(), exe);
                 if !recovery_shown {
                     if let Some(app) = APP_HANDLE.lock().unwrap().as_ref() {
-                        use tauri::Manager;
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                        }
+                        runtime::show_settings(app);
                     }
                     recovery_shown = true;
                 }

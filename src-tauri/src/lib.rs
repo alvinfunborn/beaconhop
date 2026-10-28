@@ -50,6 +50,7 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![
             runtime::record_shortcut,
+            runtime::restart_application,
             runtime::set_live_preview,
             runtime::get_settings,
             runtime::save_settings,

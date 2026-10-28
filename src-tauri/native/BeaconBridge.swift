@@ -252,3 +252,9 @@ private extension CGRect { var area: Double { isNull ? 0 : width * height } }
     window.level = .floating
     if search {NSApp.activate(ignoringOtherApps:true);window.makeKeyAndOrderFront(nil)} else {window.orderFrontRegardless()}
 }
+@_cdecl("bh_focus_settings") public func bhFocusSettings(_ raw: UnsafeMutableRawPointer?) {
+    guard let raw else {return}
+    let window = Unmanaged<NSWindow>.fromOpaque(raw).takeUnretainedValue()
+    NSApp.activate(ignoringOtherApps:true)
+    window.makeKeyAndOrderFront(nil)
+}

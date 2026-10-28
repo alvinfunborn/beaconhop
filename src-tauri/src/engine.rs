@@ -452,6 +452,17 @@ mod tests {
         assert!(!e.handle(key("A", 0, true)).consumed);
     }
     #[test]
+    fn configured_backslash_search_leaves_plain_typing_alone() {
+        let mut e = engine(4);
+        e.config.search_shortcut = "Win+\\".into();
+        assert!(!e.handle(key("Backslash", 0, true)).consumed);
+        assert_eq!(e.session.mode, Mode::Inactive);
+        let response = e.handle(key("Backslash", crate::config::SUPER, true));
+        assert!(response.consumed);
+        assert_eq!(e.session.mode, Mode::Search);
+        assert!(e.handle(key("Backslash", 0, false)).consumed);
+    }
+    #[test]
     fn normal_release_commits_previous_window() {
         let mut e = engine(4);
         e.handle(key("Tab", ALT, true));

@@ -8,6 +8,7 @@ extern "C" {
     fn bh_free(p: *mut c_char);
     fn bh_screen_permission(request: bool) -> bool;
     fn bh_panel(window: *mut c_void, search: bool);
+    fn bh_focus_settings(window: *mut c_void);
 }
 unsafe fn string(p: *mut c_char) -> Option<String> {
     if p.is_null() {
@@ -84,6 +85,14 @@ pub fn show_panel(window: &tauri::WebviewWindow, search: bool) {
     let _ = window.clone().run_on_main_thread(move || {
         if let Ok(raw) = window.ns_window() {
             unsafe { bh_panel(raw, search) };
+        }
+    });
+}
+pub fn focus_settings(window: &tauri::WebviewWindow) {
+    let window = window.clone();
+    let _ = window.clone().run_on_main_thread(move || {
+        if let Ok(raw) = window.ns_window() {
+            unsafe { bh_focus_settings(raw) };
         }
     });
 }
