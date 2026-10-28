@@ -417,6 +417,21 @@ textarea {
 .badge.pending {
   color: #e8c17f;
 }
+.permission-troubleshooting {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+.permission-troubleshooting summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+.permission-troubleshooting > p {
+  margin-top: 12px;
+  line-height: 1.7;
+}
 .diagnostics {
   padding: 16px;
   background: var(--field);

@@ -8,7 +8,7 @@ Updated: 2026-10-28. Source implementation, packaged builds and native acceptanc
 | --- | --- |
 | Rust interaction and configuration tests | 21 passed: hint allocation, immediate activation and key release ownership, partial-hint cancellation, MRU including rapid pending activations and failed-activation reconciliation, independent scopes, Unicode/phrase search, closed targets, empty inventories and modifier sides |
 | Frontend production build | TypeScript and Vite passed; embedded assets are used by both release binaries |
-| Browser interaction tests | 4 Playwright tests passed: settings save/discard and independent scopes; IME composition Enter; search/empty results/caret navigation; minimum-window light theme layout |
+| Browser interaction tests | 6 Playwright tests passed: settings save/discard and independent scopes; IME composition Enter; search/empty results/caret navigation; minimum-window light theme layout; a working keyboard hook without Input Monitoring; collapsed recovery and screen-permission button feedback |
 | Dependency/version/style checks | npm audit: 0 reported vulnerabilities; version consistency, Rust formatting and Git whitespace checks passed |
 | macOS builds | Apple Silicon debug app and optimized app + DMG built locally; ad-hoc bundle signature and DMG checksum verified; packaged release startup smoke passed; Swift bridge compiled for a macOS 14 deployment target |
 | Windows builds | MSVC x86-64 debug and optimized GUI EXE cross-compiled on this Mac; NSIS installer successfully generated |
@@ -56,6 +56,18 @@ The updated TypeScript/Vite and macOS release app/DMG builds passed, as did Rust
 Installed-app diagnostics confirmed Accessibility access, an active native keyboard hook, 11 inventoried windows across two displays, and no warnings. Native Cmd+backquote opened the installed switcher; Escape returned to settings. AltTab was temporarily quit to avoid competing shortcuts. At this handoff, Input Monitoring and Screen Recording were not enabled; the keyboard hook was active through Accessibility, while thumbnails still required Screen Recording approval. The settings window was left open on System & access, and the screen-capture permission request was issued from BeaconHop's own button.
 
 The existing Windows EXE/installer predates this branding update; Windows icon sources are updated, but that package has not been rebuilt in this macOS installation follow-up.
+
+## Menu bar and permission follow-up
+
+The monochrome template now uses the main logo's exact -11-degree window rotation, layer positions, proportions and H hint, with transparent cutouts and opacity replacing color. Its light/dark rendering was visually checked in `logs/tray-logo-alignment.png`.
+
+Permission buttons now request access and explicitly open the matching System Settings pane, with pending, success and error feedback. Accessibility and the actual running keyboard hook determine readiness, matching Screen Buoy. Input Monitoring is an optional, collapsed troubleshooting entry only while the keyboard hook is unavailable. Screen Recording remains separate and enables thumbnails.
+
+All 21 Rust tests and six browser tests passed, along with the TypeScript/Vite build, Rust formatting and Git whitespace checks. The optimized macOS app and DMG were rebuilt; strict bundle signature and DMG checksum verification passed. The installed app was backed up and replaced without changing settings. Its executable SHA-256 matches the packaged executable (`815f84b5ed27e37c4de3b007d87e5c16ad9ad5811088683a81d762e82444b00a`).
+
+From the newly installed application's own UI, a native Accessibility press on the Screen Recording button opened System Settings at **录屏与系统录音**, with BeaconHop listed. The application displayed its success feedback, and the native log confirmed `screen (Privacy_ScreenCapture)`. Evidence: `logs/macos-permissions-followup.json` and `logs/macos-permissions-followup-ax.txt`.
+
+The replacement executable no longer has the previous ad-hoc build's Accessibility approval: current installed diagnostics report Accessibility false, keyboard hook false, Input Monitoring false and Screen Recording false. No protected permission switch was changed by automation. The user must reauthorize the installed BeaconHop before keyboard switching can be accepted again; the earlier native switching results above were not rerun for this permission-only follow-up.
 
 ## Remaining acceptance
 

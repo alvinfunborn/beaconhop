@@ -60,19 +60,26 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
   const [draft, setDraft] = useState(initial);
   const [tab, setTab] = useState("general");
   const [permissions, setPermissions] = useState<Permissions>();
+  const [pendingPermission, setPendingPermission] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [diagnostics, setDiagnostics] = useState("");
   useEffect(() => setDraft(initial), [initial]);
   useEffect(() => {
+    let alive = true;
     const refresh = () =>
       call<Permissions>("get_permissions")
-        .then(setPermissions)
+        .then((status) => { if (alive) setPermissions(status); })
         .catch(() => {});
     refresh();
-    const timer = setInterval(refresh, 2500);
-    return () => clearInterval(timer);
+    const timer = setInterval(() => { if (!document.hidden) refresh(); }, 2500);
+    window.addEventListener("focus", refresh);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+    };
   }, []);
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
   function change<K extends keyof Config>(key: K, value: Config[K]) {
@@ -91,6 +98,48 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
     } finally {
       setBusy(false);
     }
+  }
+  async function requestPermission(kind: string) {
+    setPendingPermission(kind);
+    setError("");
+    setNotice("");
+    try {
+      await call("request_permission", { kind });
+      setNotice(t(
+        "System Settings opened. Enable BeaconHop, then return here.",
+        "已打开系统设置，请开启 BeaconHop 后返回。",
+      ));
+      setPermissions(await call<Permissions>("get_permissions"));
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setPendingPermission(null);
+    }
+  }
+  function permissionSetting(
+    key: "accessibility" | "inputMonitoring" | "screenRecording",
+    kind: string,
+    title: string,
+    description: string,
+  ) {
+    return (
+      <Setting key={key} title={title} description={description}>
+        {permissions?.[key] ? (
+          <span className="badge good">{t("Granted", "已授权")}</span>
+        ) : (
+          <button
+            className="button secondary"
+            aria-label={t(`Open ${title} settings`, `打开${title}设置`)}
+            disabled={pendingPermission !== null}
+            onClick={() => requestPermission(kind)}
+          >
+            {pendingPermission === kind
+              ? t("Opening…", "正在打开…")
+              : t("Open settings", "前往授权")}
+          </button>
+        )}
+      </Setting>
+    );
   }
   function toggle(
     key:
@@ -471,15 +520,6 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                         ),
                       ],
                       [
-                        "inputMonitoring",
-                        "input",
-                        t("Input monitoring", "输入监控"),
-                        t(
-                          "Receive global shortcuts and hint keys.",
-                          "接收全局快捷键和提示按键。",
-                        ),
-                      ],
-                      [
                         "screenRecording",
                         "screen",
                         t("Screen recording", "屏幕录制"),
@@ -488,30 +528,12 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                           "生成窗口预览；未授权时仍可使用窗口切换。",
                         ),
                       ],
-                    ].map(([key, kind, title, description]) => (
-                      <Setting
-                        key={key}
-                        title={title}
-                        description={description}
-                      >
-                        {permissions[key as keyof Permissions] ? (
-                          <span className="badge good">
-                            {t("Granted", "已授权")}
-                          </span>
-                        ) : (
-                          <button
-                            className="button secondary"
-                            onClick={() =>
-                              call("request_permission", { kind }).catch((e) =>
-                                setError(String(e)),
-                              )
-                            }
-                          >
-                            {t("Grant access", "前往授权")}
-                          </button>
-                        )}
-                      </Setting>
-                    ))}
+                    ].map(([key, kind, title, description]) =>
+                      permissionSetting(
+                        key as "accessibility" | "screenRecording",
+                        kind, title, description,
+                      ),
+                    )}
                     <p className="small muted">
                       {t(
                         "After changing macOS permissions, a restart may be required.",
@@ -545,6 +567,22 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                       : t("Not ready", "未就绪")}
                   </span>
                 </Setting>
+                {permissions?.required && !permissions.keyboardHook && (
+                  <details className="permission-troubleshooting">
+                    <summary>{t("Keyboard troubleshooting", "键盘监听排查")}</summary>
+                    <p className="small muted">
+                      {t(
+                        "Accessibility normally enables shortcuts. If it is already granted and the listener is still unavailable, check Input Monitoring and restart BeaconHop.",
+                        "辅助功能通常已能启用快捷键。如果已授权但监听仍未就绪，再检查输入监控并重启 BeaconHop。",
+                      )}
+                    </p>
+                    {permissionSetting(
+                      "inputMonitoring", "input",
+                      t("Input monitoring", "输入监控"),
+                      t("Optional keyboard-listener recovery.", "仅用于键盘监听异常时的排查。"),
+                    )}
+                  </details>
+                )}
               </section>
               <section>
                 <h2>{t("Diagnostics", "诊断")}</h2>

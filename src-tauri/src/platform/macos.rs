@@ -50,14 +50,33 @@ pub fn permissions() -> PermissionStatus {
     }
 }
 pub fn request_permission(kind: &str) -> Result<(), String> {
-    match kind {
-        "accessibility" => crate::macos_access::request_accessibility(),
-        "input" => crate::macos_access::request_input_monitoring(),
+    let pane = match kind {
+        "accessibility" => {
+            crate::macos_access::request_accessibility();
+            "Privacy_Accessibility"
+        }
+        "input" => {
+            crate::macos_access::request_input_monitoring();
+            "Privacy_ListenEvent"
+        }
         "screen" => {
             unsafe { bh_screen_permission(true) };
+            "Privacy_ScreenCapture"
         }
         _ => return Err("Unknown permission".into()),
+    };
+    // A request may return without showing another prompt after an earlier
+    // decision. The button must still take the user to the relevant setting.
+    let status = std::process::Command::new("/usr/bin/open")
+        .arg(format!(
+            "x-apple.systempreferences:com.apple.preference.security?{pane}"
+        ))
+        .status()
+        .map_err(|error| format!("Could not open System Settings: {error}"))?;
+    if !status.success() {
+        return Err("Could not open System Settings".into());
     }
+    log::info!("Opened macOS permission settings: {kind} ({pane})");
     Ok(())
 }
 pub fn show_panel(window: &tauri::WebviewWindow, search: bool) {

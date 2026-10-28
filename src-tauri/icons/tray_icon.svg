@@ -1,11 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44" fill="none">
-  <title>BeaconHop menu bar</title>
-  <g stroke="black" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M8 18H7a3 3 0 0 0-3 3v14a3 3 0 0 0 3 3h20a3 3 0 0 0 3-3v-1"/>
-    <path d="M14 12h-1a3 3 0 0 0-3 3v14a3 3 0 0 0 3 3h20a3 3 0 0 0 3-3v-1"/>
-    <rect x="16" y="6" width="24" height="20" rx="3"/>
-    <path d="M17 12h22"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="100 125 800 800" fill="none">
+  <title>BeaconHop monochrome window stack</title>
+  <!-- Same rotation, window proportions, positions and hint as beaconhop.svg.
+       The masks keep transparent panes from exposing the windows behind them. -->
+  <defs>
+    <mask id="rear" maskUnits="userSpaceOnUse" x="-100" y="-100" width="1000" height="1100">
+      <rect x="-100" y="-100" width="1000" height="1100" fill="white"/>
+      <rect x="57" y="139" width="568" height="354" rx="42" fill="black"/>
+    </mask>
+    <mask id="middle" maskUnits="userSpaceOnUse" x="-100" y="-100" width="1000" height="1100">
+      <rect x="-100" y="-100" width="1000" height="1100" fill="white"/>
+      <rect x="114" width="568" height="354" rx="42" fill="black"/>
+    </mask>
+    <mask id="front" maskUnits="userSpaceOnUse" x="100" y="-10" width="600" height="380">
+      <rect x="114" width="568" height="354" rx="42" fill="white"/>
+      <rect x="132" y="72" width="532" height="264" rx="27" fill="black"/>
+      <g fill="black"><circle cx="150" cy="36" r="7"/><circle cx="175" cy="36" r="7"/><circle cx="200" cy="36" r="7"/></g>
+      <rect x="338" y="140" width="120" height="120" rx="27" fill="white"/>
+      <path d="M376 173V227M420 173V227M376 200H420" stroke="black" stroke-width="12" stroke-linecap="round"/>
+    </mask>
+  </defs>
+  <g transform="translate(156 206) rotate(-11 350 315)" fill="black">
+    <rect y="278" width="568" height="354" rx="42" opacity=".45" mask="url(#rear)"/>
+    <rect x="57" y="139" width="568" height="354" rx="42" opacity=".7" mask="url(#middle)"/>
+    <rect x="114" width="568" height="354" rx="42" mask="url(#front)"/>
   </g>
-  <circle cx="20" cy="9" r="1" fill="black"/>
-  <circle cx="24" cy="9" r="1" fill="black"/>
 </svg>

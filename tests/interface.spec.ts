@@ -1,4 +1,41 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+
+async function permissionsFixture(page: Page, keyboardHook: boolean) {
+  await page.route("**/src/api.ts", async (route) => {
+    const response = await route.fetch();
+    let body = (await response.text())
+      .replace(/inputMonitoring:\s*true/, "inputMonitoring: false")
+      .replace(/screenRecording:\s*true/, "screenRecording: false");
+    if (!keyboardHook) {
+      body = body.replace(/keyboardHook:\s*true/, "keyboardHook: false")
+        .replace(/ready:\s*true/, "ready: false");
+    }
+    await route.fulfill({ response, body });
+  });
+}
+
+test("a working listener needs no Input Monitoring grant and screen settings gives feedback", async ({ page }) => {
+  await permissionsFixture(page, true);
+  await page.goto("/?preview=1");
+  await page.getByRole("button", { name: "System & access", exact: true }).click();
+  await expect(page.getByText("Running", { exact: true })).toBeVisible();
+  await expect(page.getByText("Input monitoring", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Keyboard troubleshooting", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Open Screen recording settings", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("System Settings opened. Enable BeaconHop, then return here.");
+});
+
+test("Input Monitoring is available as collapsed recovery when the listener is unavailable", async ({ page }) => {
+  await permissionsFixture(page, false);
+  await page.goto("/?preview=1");
+  await page.getByRole("button", { name: "System & access", exact: true }).click();
+  await expect(page.getByText("Not ready", { exact: true })).toBeVisible();
+  const inputSettings = page.getByRole("button", { name: "Open Input monitoring settings", exact: true });
+  await expect(inputSettings).not.toBeVisible();
+  await page.getByText("Keyboard troubleshooting", { exact: true }).click();
+  await expect(inputSettings).toBeVisible();
+  await expect(page.getByText("Optional keyboard-listener recovery.", { exact: true })).toBeVisible();
+});
 test("settings save preserves independent scopes and supports discard", async ({
   page,
 }) => {
