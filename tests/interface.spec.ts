@@ -103,3 +103,78 @@ test("settings and light theme fit the minimum window without horizontal scrolli
     page.getByRole("button", { name: "Save changes" }),
   ).toBeInViewport();
 });
+
+test("shortcut recording accepts Win+backquote, repeats the current value and restores default", async ({ page }) => {
+  await page.goto("/?preview=1");
+  const search = page.getByRole("button", { name: "Search shortcut", exact: true });
+  await search.click();
+  await expect(search).toHaveAttribute("aria-pressed", "true");
+  await search.press("Meta+Backquote");
+  await expect(search).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByText("Shortcut unchanged", { exact: true })).toBeVisible();
+  await search.click();
+  await search.press("Meta+Digit7");
+  await expect(search).toContainText("7");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await page.getByRole("button", { name: "Restore default" }).click();
+  await expect(search).toContainText("`");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Settings saved" })).toBeVisible();
+  await search.click();
+  await search.press("Escape");
+  await expect(search).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByText("Recording cancelled", { exact: true })).toBeVisible();
+});
+
+for (const count of [6, 24, 80]) {
+  test(`all ${count} windows fit without scrolling and preserve portrait/landscape aspect`, async ({ page }) => {
+    await page.route("**/src/api.ts", async (route) => {
+      const response = await route.fetch();
+      let body = await response.text();
+      body += `\nsession.windows = Array.from({length:${count}}, (_, i) => ({...session.windows[i % 6], id:String(i), hint:String(i), bounds:{x:0,y:0,width:i%3===0?600:1440,height:i%3===0?1000:900}})); session.resultIds=session.windows.map(w=>w.id);`;
+      await route.fulfill({ response, body });
+    });
+    await page.setViewportSize({ width: 1000, height: 680 });
+    await page.goto("/?preview=1&view=switcher");
+    const cards = page.getByRole("option");
+    await expect(cards).toHaveCount(count);
+    await expect(async () => {
+      const geometry = await page.evaluate(() => {
+        const list = document.querySelector(".window-list")!;
+        const area = list.getBoundingClientRect();
+        return { scroll: list.scrollHeight > list.clientHeight || list.scrollWidth > list.clientWidth,
+          cards: [...document.querySelectorAll(".window-card")].map((el) => {
+            const r = el.getBoundingClientRect(), p = el.querySelector(".preview-frame")!.getBoundingClientRect();
+            return { x:r.x, y:r.y, right:r.right, bottom:r.bottom, width:r.width, height:r.height, ratio:p.width/p.height };
+          }), area: { x:area.x, y:area.y, right:area.right, bottom:area.bottom } };
+      });
+      expect(geometry.scroll).toBe(false);
+      geometry.cards.forEach((r, i) => {
+        expect(r.width).toBeGreaterThan(0);
+        expect(r.height).toBeGreaterThan(0);
+        expect(r.x).toBeGreaterThanOrEqual(geometry.area.x);
+        expect(r.y).toBeGreaterThanOrEqual(geometry.area.y);
+        expect(r.right).toBeLessThanOrEqual(geometry.area.right);
+        expect(r.bottom).toBeLessThanOrEqual(geometry.area.bottom);
+        expect(Math.abs(r.ratio - (i%3===0 ? .6 : 1.6))).toBeLessThan(.07);
+        for (const other of geometry.cards.slice(i+1))
+          expect(r.right <= other.x+.5 || other.right <= r.x+.5 || r.bottom <= other.y+.5 || other.bottom <= r.y+.5).toBe(true);
+      });
+    }).toPass();
+    await page.screenshot({ path: `logs/tiles-${count}.png` });
+    await page.setViewportSize({ width: 760, height: 580 });
+    await expect(async () => {
+      expect(await page.locator(".window-list").evaluate(el => el.scrollHeight <= el.clientHeight && el.scrollWidth <= el.clientWidth)).toBe(true);
+      for (let i = 0; i < count; i++) await expect(cards.nth(i)).toBeInViewport({ ratio: 1 });
+    }).toPass();
+    await page.evaluate(async () => {
+      const api = await import("/src/api.ts" as string);
+      const config = await api.call("get_settings");
+      await api.call("save_settings", { config: { ...config, layout: "list" } });
+    });
+    await expect(async () => {
+      expect(await page.locator(".window-list").evaluate(el => el.scrollHeight <= el.clientHeight && el.scrollWidth <= el.clientWidth)).toBe(true);
+      for (let i = 0; i < count; i++) await expect(cards.nth(i)).toBeInViewport({ ratio: 1 });
+    }).toPass();
+  });
+}

@@ -9,13 +9,15 @@ BeaconHop is a window navigator for macOS and Windows, adapted from [Screen Buoy
 - **Alt + Tab**: hold Alt to see windows. Tab / Shift + Tab cycle through recent windows. Release Alt to switch.
 - **Type a complete hint while holding**: immediately activate that exact window. Hints stay fixed for the invocation.
 - **Backslash (`\`)**: enter persistent search; you can release Alt.
-- **Cmd + ` on macOS / Win + ` on Windows**: open search directly.
+- **Cmd + ` on macOS / Win + ` on Windows**: open search directly. Shortcut recording includes a restore-default action and feedback when the same shortcut is entered again.
 - Search accepts Chinese input methods. Enter during composition confirms text instead of switching windows.
 - Escape cancels. Click a card to switch. Minimized windows are restored.
 
 Both shortcuts are configurable. Desktop and display scopes are independent. Cross-desktop navigation follows a window to its existing desktop; it never moves the window.
 
 ## Status and systems
+
+The overview fits every matching window on screen without scrolling, keeps each preview’s window aspect ratio, and orders windows by most recent use, including filtered search results.
 
 Version 0.1.0 has local macOS app/DMG and Windows EXE/NSIS builds. macOS native validation includes 100 repeated round trips, two displays, multiple Spaces, same-title windows, closed targets and WeType Chinese input; Windows runtime acceptance is pending an accessible test machine. These are development distributions: macOS is ad-hoc signed and not notarized; Windows is unsigned. See [validation](docs/validation.md) for the evidence and remaining checks.
 

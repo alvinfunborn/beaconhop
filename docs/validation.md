@@ -6,9 +6,9 @@ Updated: 2026-10-28. Source implementation, packaged builds and native acceptanc
 
 | Check | Evidence / result |
 | --- | --- |
-| Rust interaction and configuration tests | 21 passed: hint allocation, immediate activation and key release ownership, partial-hint cancellation, MRU including rapid pending activations and failed-activation reconciliation, independent scopes, Unicode/phrase search, closed targets, empty inventories and modifier sides |
+| Rust interaction and configuration tests | 23 passed: hint allocation, immediate activation and key release ownership, partial-hint cancellation, MRU including rapid pending activations and failed-activation reconciliation, independent scopes, Unicode/phrase search, closed targets, empty inventories, modifier sides and ANSI/ISO grave-key mapping |
 | Frontend production build | TypeScript and Vite passed; embedded assets are used by both release binaries |
-| Browser interaction tests | 6 Playwright tests passed: settings save/discard and independent scopes; IME composition Enter; search/empty results/caret navigation; minimum-window light theme layout; a working keyboard hook without Input Monitoring; collapsed recovery and screen-permission button feedback |
+| Browser interaction tests | 10 Playwright tests passed: settings save/discard and independent scopes; IME composition Enter; search/empty results/caret navigation; minimum-window light theme layout; a working keyboard hook without Input Monitoring; collapsed recovery and screen-permission button feedback; shortcut recording/default feedback; all-visible aspect-preserving layouts for 6/24/80 windows |
 | Dependency/version/style checks | npm audit: 0 reported vulnerabilities; version consistency, Rust formatting and Git whitespace checks passed |
 | macOS builds | Apple Silicon debug app and optimized app + DMG built locally; ad-hoc bundle signature and DMG checksum verified; packaged release startup smoke passed; Swift bridge compiled for a macOS 14 deployment target |
 | Windows builds | MSVC x86-64 debug and optimized GUI EXE cross-compiled on this Mac; NSIS installer successfully generated |
@@ -68,6 +68,18 @@ All 21 Rust tests and six browser tests passed, along with the TypeScript/Vite b
 From the newly installed application's own UI, a native Accessibility press on the Screen Recording button opened System Settings at **录屏与系统录音**, with BeaconHop listed. The application displayed its success feedback, and the native log confirmed `screen (Privacy_ScreenCapture)`. Evidence: `logs/macos-permissions-followup.json` and `logs/macos-permissions-followup-ax.txt`.
 
 The replacement executable no longer has the previous ad-hoc build's Accessibility approval: current installed diagnostics report Accessibility false, keyboard hook false, Input Monitoring false and Screen Recording false. No protected permission switch was changed by automation. The user must reauthorize the installed BeaconHop before keyboard switching can be accepted again; the earlier native switching results above were not rerun for this permission-only follow-up.
+
+## Native icon catalog, shortcuts, tiling and recency follow-up
+
+The macOS app now ships an Icon Composer `Assets.car` at `Contents/Resources` and declares `CFBundleIconName=BeaconHop`. The existing padded ICNS remains the older-macOS fallback. An actual System Settings screenshot of the newly installed app confirms the extra light backing plate is gone (`logs/system-settings-beaconhop-icon.png`); an NSWorkspace icon readback is in `logs/installed-native-icon-256.png`.
+
+The local search shortcut was restored from `Super+7` to `Super+Backquote`, preserving every other setting. Recording now subscribes before enabling the native recorder, supports focused WebView fallback and the macOS ISO grave-key code, ignores repeat events, gives explicit same-value feedback, and provides a restore-default button. Win is represented by Super internally and by Command on a Mac.
+
+The overview sizes its native panel to the inventory and available display. All matching windows fit without scrolling, in usage order, with each preview retaining its native window aspect ratio. Grid and compact layouts resize to fit. Recent external focus observations and BeaconHop activations determine ordering; search filters that order rather than sorting by match score.
+
+Validation: 23 Rust tests passed, including ANSI/ISO key mapping and usage order despite reordered native inventory and search; ten Playwright tests passed, including same-shortcut feedback, Win+backquote and restore-default recording, plus all-visible, non-overlapping aspect-preserving grids for 6/24/80 mixed portrait and landscape windows at 1000×680, resized grids at 760×580, and all-visible compact layouts at 760×580. TypeScript/Vite build, formatting, whitespace/version checks and the Windows x86-64 MSVC cross-check passed. The optimized app/DMG passed signature and checksum checks and were installed; executable and native icon catalog match the package. Evidence: `logs/macos-tiling-install.json`, `logs/tiles-{6,24,80}.png`.
+
+At installation readback, the replacement executable again reported Accessibility false and keyboard hook false; the existing development signature does not preserve TCC approval across these rebuilds. No OS grant was changed by automation. A controlled native probe confirmed BeaconHop was foreground before Cmd+backquote, then uTools became foreground; no recording-completion feedback arrived while BeaconHop lacked its hook. Global-shortcut, actual-window MRU and thumbnail-grid acceptance on this replacement remain dependent on the user reauthorizing Accessibility and Screen Recording. The older extended native switching results above are historical, not a rerun of this build.
 
 ## Remaining acceptance
 

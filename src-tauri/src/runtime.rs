@@ -50,6 +50,9 @@ pub fn key(event: KeyEvent) -> bool {
         && event.down
         && !matches!(event.key.as_str(), "Alt" | "Control" | "Super" | "Shift")
     {
+        if event.repeat {
+            return true;
+        }
         let mut pieces = Vec::new();
         for (bit, name) in [
             (config::CTRL, "Ctrl"),
@@ -189,8 +192,13 @@ fn show(search: bool) {
         let scale = 1.; // macOS screen bounds are already logical points.
         #[cfg(target_os = "windows")]
         let scale = display.scale.max(1.);
-        let width = (b.width - 64. * scale).clamp(480. * scale, 1100. * scale);
-        let height = (b.height - 96. * scale).clamp(360. * scale, 720. * scale);
+        let count = (session.windows.len() as f64).sqrt();
+        let width = ((800. + count * 100.) * scale)
+            .min(b.width - 64. * scale)
+            .max(1.);
+        let height = ((520. + count * 45.) * scale)
+            .min(b.height - 96. * scale)
+            .max(1.);
         #[cfg(target_os = "macos")]
         {
             let _ = window.set_size(tauri::LogicalSize::new(width, height));

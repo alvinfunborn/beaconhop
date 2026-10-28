@@ -28,6 +28,7 @@ export type Destination = {
   currentDesktop: boolean | null;
   minimized: boolean;
   hidden: boolean;
+  bounds: { x: number; y: number; width: number; height: number };
   icon: string | null;
   hint: string;
 };

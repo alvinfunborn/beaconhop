@@ -113,7 +113,8 @@ fn keycode_to_name(code: u16) -> String {
         46 => "M",
         48 => "Tab",
         49 => "Space",
-        50 => "Backquote",
+        // ISO keyboards place the grave-accent key at virtual keycode 10.
+        10 | 50 => "Backquote",
         51 => "Backspace",
         53 => "Escape",
         54 | 55 => "Super",
@@ -322,7 +323,13 @@ pub fn cleanup() {
 
 #[cfg(test)]
 mod tests {
-    use super::modifier_down_from_flags;
+    use super::{keycode_to_name, modifier_down_from_flags};
+
+    #[test]
+    fn grave_key_is_recordable_on_ansi_and_iso_keyboards() {
+        assert_eq!(keycode_to_name(50), "Backquote");
+        assert_eq!(keycode_to_name(10), "Backquote");
+    }
 
     #[test]
     fn modifier_events_use_their_own_flags_even_before_session_state_updates() {

@@ -47,6 +47,16 @@ if (process.platform === "darwin") {
     let help;
     try { help = execFileSync(ictool, ["--help"], { encoding: "utf8" }); }
     catch (error) { help = String(error.stdout ?? "") + String(error.stderr ?? ""); }
+    // Compile the native icon catalog as well as the legacy ICNS. macOS 26+
+    // otherwise treats the padded ICNS as artwork and adds a second backing plate.
+    const catalog = "src-tauri/icons/macos";
+    mkdirSync(catalog, { recursive: true });
+    execFileSync("xcrun", ["actool", icon, "--compile", catalog,
+      "--platform", "macosx", "--minimum-deployment-target", "14.0",
+      "--app-icon", "BeaconHop", "--output-partial-info-plist", join(work, "IconInfo.plist")],
+      { stdio: "inherit" });
+    // The fallback ICNS below is generated at the established pre-Tahoe size.
+    rmSync(join(catalog, "BeaconHop.icns"), { force: true });
     const artwork = join(work, "artwork.png");
     execFileSync(ictool, help.includes("--export-image")
       ? [icon, "--export-image", "--output-file", artwork, "--platform", "macOS", "--rendition", "Default", "--width", "824", "--height", "824", "--scale", "1"]

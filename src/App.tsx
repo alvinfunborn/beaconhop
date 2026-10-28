@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { Config, Session, Permissions, Destination } from "./types";
 import { call, subscribe, defaults, native, preview } from "./api";
+import { tileWindows, type Tile } from "./layout";
 const isMac = navigator.platform.toLowerCase().includes("mac");
 const windowsNative =
   native && navigator.platform.toLowerCase().includes("win");
@@ -288,6 +289,7 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                     value={draft.holdShortcut}
                     onChange={(v) => change("holdShortcut", v)}
                     label={t("Hold shortcut", "按住模式快捷键")}
+                    zh={zh}
                   />
                 </Setting>
                 <Setting
@@ -301,6 +303,8 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                     value={draft.searchShortcut}
                     onChange={(v) => change("searchShortcut", v)}
                     label={t("Search shortcut", "搜索模式快捷键")}
+                    zh={zh}
+                    defaultValue="Super+Backquote"
                   />
                 </Setting>
                 <div className="tip">
@@ -444,8 +448,8 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                   "layout",
                   t("Layout", "布局"),
                   t(
-                    "Use a visual grid or a compact list.",
-                    "选择缩略图网格或紧凑列表。",
+                    "All windows fit on screen, most recently used first.",
+                    "所有窗口平铺在一屏内，最近使用的窗口优先。",
                   ),
                   [
                     ["grid", t("Grid", "网格")],
@@ -688,70 +692,60 @@ function Setting({
     </div>
   );
 }
-function Shortcut({
-  value,
-  onChange,
-  label,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  label: string;
+function Shortcut({ value, onChange, label, zh, defaultValue }: {
+  value: string; onChange: (v: string) => void; label: string; zh: boolean; defaultValue?: string;
 }) {
   const [recording, setRecording] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const finish = useRef((next: string) => {});
+  finish.current = (next) => {
+    if (next) {
+      setFeedback(next === value ? (zh ? "已是当前快捷键" : "Shortcut unchanged") : (zh ? "已录入，保存后生效" : "Recorded. Save to apply."));
+      onChange(next);
+    } else setFeedback(zh ? "已取消录入" : "Recording cancelled");
+    setRecording(false);
+  };
   useEffect(() => {
     if (!recording) return;
     let disposed = false;
     let off = () => {};
-    subscribe<string>("shortcut-recorded", (value) => {
-      if (value) onChange(value);
-      setRecording(false);
-    }).then((f) => (disposed ? f() : (off = f)));
-    call("record_shortcut", { enabled: true }).catch(() => {});
+    // Install the completion listener before enabling the native recorder.
+    (async () => {
+      off = await subscribe<string>("shortcut-recorded", (next) => finish.current(next));
+      if (disposed) { off(); return; }
+      await call("record_shortcut", { enabled: true });
+      if (disposed) await call("record_shortcut", { enabled: false });
+    })().catch((e) => { if (!disposed) { setFeedback(String(e)); setRecording(false); } });
     return () => {
       disposed = true;
       off();
       call("record_shortcut", { enabled: false }).catch(() => {});
     };
   }, [recording]);
-  return (
+  return <div className="shortcut-editor">
     <button
       className={"shortcut " + (recording ? "recording" : "")}
       aria-label={label}
-      onClick={() => setRecording(true)}
+      aria-pressed={recording}
+      onClick={() => { setFeedback(""); setRecording(true); }}
       onBlur={() => setRecording(false)}
       onKeyDown={(e) => {
         if (!recording) return;
         e.preventDefault();
-        if (native) return;
-        if (e.key === "Escape") {
-          setRecording(false);
-          return;
-        }
-        const modifiers = [
-          e.ctrlKey ? "Ctrl" : "",
-          e.altKey ? "Alt" : "",
-          e.metaKey ? "Super" : "",
-          e.shiftKey ? "Shift" : "",
-        ].filter(Boolean);
-        const key = e.code.startsWith("Key")
-          ? e.code.slice(3)
-          : e.code.startsWith("Digit")
-            ? e.code.slice(5)
-            : e.code;
-        if (
-          ["Tab", "Space", "Backquote"].includes(key) ||
-          /^[A-Z0-9]$/.test(key)
-        ) {
-          if (modifiers.length) {
-            onChange([...modifiers, key].join("+"));
-            setRecording(false);
-          }
-        }
+        e.stopPropagation();
+        if (e.repeat) return;
+        if (e.key === "Escape") { finish.current(""); return; }
+        const modifiers = [e.ctrlKey ? "Ctrl" : "", e.altKey ? "Alt" : "", e.metaKey ? "Super" : "", e.shiftKey ? "Shift" : ""].filter(Boolean);
+        const key = e.key === "`" || (e.code === "IntlBackslash" && e.key === "~") ? "Backquote"
+          : e.code.startsWith("Key") ? e.code.slice(3) : e.code.startsWith("Digit") ? e.code.slice(5) : e.code;
+        // Also handle focused WebView events when the global hook is unavailable.
+        if (modifiers.some((m) => m !== "Shift") && (["Tab", "Space", "Backquote"].includes(key) || /^[A-Z0-9]$/.test(key)))
+          finish.current([...modifiers, key].join("+"));
       }}
-    >
-      {recording ? "Press shortcut…" : shortcut(value)}
-    </button>
-  );
+    >{recording ? (zh ? "请按下快捷键…" : "Press shortcut…") : shortcut(value)}</button>
+    {defaultValue && <button className="shortcut-reset" onClick={() => finish.current(defaultValue)}>{zh ? "恢复默认" : "Restore default"}</button>}
+    <span className="shortcut-feedback" role="status">{feedback}</span>
+  </div>;
 }
 
 function Switcher({ config, zh }: { config: Config; zh: boolean }) {
@@ -794,11 +788,16 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
       return () => clearTimeout(timer);
     }
   }, [session?.sessionId, session?.mode]);
+  const [available, setAvailable] = useState({ width: 0, height: 0 });
   useEffect(() => {
-    list.current
-      ?.querySelector('[aria-selected="true"]')
-      ?.scrollIntoView({ block: "nearest" });
-  }, [session?.selected]);
+    const node = list.current;
+    if (!node) return;
+    const refresh = () => setAvailable({ width: Math.max(0, node.clientWidth - 28), height: Math.max(0, node.clientHeight - 28) });
+    const observer = new ResizeObserver(refresh);
+    observer.observe(node);
+    refresh();
+    return () => observer.disconnect();
+  }, []);
   async function action(name: string, args: Record<string, unknown> = {}) {
     try {
       await call(name, args);
@@ -813,6 +812,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
         (a, b) =>
           session.resultIds.indexOf(a.id) - session.resultIds.indexOf(b.id),
       ) ?? [];
+  const tiles = useMemo(() => tileWindows(visible, available.width, available.height, config.layout === "list"), [session, available, config.layout]);
   const isSearch = session?.mode === "search";
   return (
     <div
@@ -847,18 +847,13 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
           )
             return;
           e.preventDefault();
-          const columns =
-            config.layout === "grid" && list.current
-              ? getComputedStyle(list.current).gridTemplateColumns.split(" ")
-                  .length
-              : 1;
+          const columns = tiles.columns;
           let delta =
             ["ArrowUp", "ArrowLeft"].includes(e.key) ||
             (e.key === "Tab" && e.shiftKey)
               ? -1
               : 1;
           if (
-            config.layout === "grid" &&
             ["ArrowUp", "ArrowDown"].includes(e.key)
           )
             delta *= columns;
@@ -939,10 +934,11 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
           session?.selected ? "window-" + session.selected : undefined
         }
       >
-        {visible.map((w) => (
+        {visible.map((w, index) => (
           <WindowCard
             key={`${session?.sessionId}:${w.id}`}
             window={w}
+            tile={tiles.tiles[index]}
             selected={w.id === session?.selected}
             thumbnails={config.thumbnails && config.layout === "grid"}
             sessionId={session?.sessionId ?? 0}
@@ -1008,6 +1004,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
 }
 function WindowCard({
   window: w,
+  tile,
   selected,
   thumbnails,
   sessionId,
@@ -1016,6 +1013,7 @@ function WindowCard({
   zh,
 }: {
   window: Destination;
+  tile?: Tile;
   selected: boolean;
   thumbnails: boolean;
   sessionId: number;
@@ -1089,14 +1087,18 @@ function WindowCard({
         () => {},
       );
     };
-  }, [w.id, sessionId, thumbnails, search]);
+  }, [w.id, sessionId, thumbnails, search, tile?.x, tile?.y, tile?.width, tile?.height]);
   return (
     <button
       ref={element}
       id={"window-" + w.id}
       role="option"
       aria-selected={selected}
-      className={"window-card " + (selected ? "selected" : "")}
+      className={"window-card " + (selected ? "selected " : "") + (tile && tile.meta < 40 ? "dense" : "")}
+      style={tile ? { left: tile.x + 14, top: tile.y + 14, width: tile.width, height: tile.height,
+        "--tile-preview": `${tile.preview}px`, "--tile-meta": `${tile.meta}px`,
+        "--hint-size": `${Math.min(17, Math.max(9, tile.preview / 5))}px`,
+      } as CSSProperties : { visibility: "hidden" }}
       onClick={onSelect}
       title={`${w.appName} — ${w.title}`}
     >

@@ -49,6 +49,7 @@ let session: Session = {
     currentDesktop: i !== 2,
     minimized: i === 4,
     hidden: false,
+    bounds: { x: 0, y: 0, width: i === 4 ? 700 : 1440, height: i === 4 ? 1000 : 900 },
     icon: null,
     hint: "ASDFGH"[i],
   })),

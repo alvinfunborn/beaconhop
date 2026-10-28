@@ -53,6 +53,7 @@ longDescription = "Keyboard-first window navigation with visual hints, previews 
 [bundle.macOS]
 minimumSystemVersion = "14.0"
 signingIdentity = "-"
+files = { "Resources/Assets.car" = "icons/macos/Assets.car" }
 
 [bundle.windows.nsis]
 displayLanguageSelector = true

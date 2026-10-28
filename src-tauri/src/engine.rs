@@ -182,8 +182,7 @@ impl Engine {
         self.session.revision += 1;
     }
     pub fn results(&self) -> Vec<&HintWindow> {
-        let mut items: Vec<_> = self
-            .session
+        self.session
             .windows
             .iter()
             .filter_map(|w| {
@@ -194,11 +193,9 @@ impl Engine {
                     &format!("{} {}", w.window.app_name, w.window.title),
                     &self.session.query,
                 )
-                .map(|s| (w, s))
+                .map(|_| w)
             })
-            .collect();
-        items.sort_by_key(|(_, s)| std::cmp::Reverse(*s));
-        items.into_iter().map(|(w, _)| w).collect()
+            .collect()
     }
     pub fn search(&mut self, query: String) {
         self.session.query = query;
@@ -546,6 +543,36 @@ mod tests {
         assert!(score("Visual Studio Code", "vsc").is_some());
         assert!(score("Terminal BeaconHop", "term beacon").is_some());
         assert_eq!(score("Terminal", "xyzz"), None);
+    }
+
+    #[test]
+    fn external_focus_changes_and_search_keep_recent_windows_first() {
+        let mut e = engine(5);
+        for id in ["4", "2", "3"] {
+            e.observe_focus(Some(id.into()));
+        }
+        // Native inventory/Z-order changes must not replace observed usage order.
+        let mut snapshot = e.snapshot.clone();
+        snapshot.windows.reverse();
+        e.update(snapshot);
+        e.open(Mode::Search, false);
+        assert_eq!(
+            e.results()
+                .iter()
+                .map(|w| w.window.id.as_str())
+                .collect::<Vec<_>>(),
+            ["3", "2", "4", "0", "1"]
+        );
+        e.session.windows[0].window.title = "other 工作 context".into();
+        e.session.windows[1].window.title = "工作".into();
+        e.search("工作".into());
+        assert_eq!(
+            e.results()
+                .iter()
+                .map(|w| w.window.id.as_str())
+                .collect::<Vec<_>>(),
+            ["3", "2", "4", "0", "1"]
+        );
     }
 }
 

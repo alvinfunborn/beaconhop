@@ -579,12 +579,8 @@ textarea {
 .window-list {
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(235px, 1fr));
-  align-content: start;
-  gap: 15px;
-  padding: 21px;
+  overflow: hidden;
+  position: relative;
 }
 .window-card {
   background: var(--card);
@@ -927,3 +923,24 @@ textarea {
 .list-layout .window-meta {
   width: auto;
 }
+
+.shortcut-editor { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 7px; max-width: 280px; }
+.shortcut-reset { border: 0; background: transparent; color: var(--muted); font-size: 11px; padding: 4px; }
+.shortcut-feedback { flex-basis: 100%; min-height: 14px; text-align: right; font-size: 10px; color: var(--muted); }
+.switcher-header, .switcher-footer, .switcher-warning, .switcher-error { flex-shrink: 0; }
+.window-card { position: absolute; }
+.window-card .preview-frame { height: var(--tile-preview); aspect-ratio: auto; }
+.window-card .window-meta { height: var(--tile-meta); min-height: 0; padding: 5px 8px; overflow: hidden; }
+.window-card.dense .window-meta p { display: none; }
+.window-card.dense .window-meta h2 { font-size: 10px; }
+.window-card.dense .window-meta > img, .window-card.dense .app-initial { width: 16px; height: 16px; }
+.window-card .window-hint { top: 5px; left: 5px; padding: 2px 5px; min-width: 0; font-size: var(--hint-size); }
+.window-card .window-placeholder > span { font-size: 24px; }
+.window-card.dense .window-placeholder small { display: none; }
+.window-card .window-placeholder img { max-width: 35%; max-height: 45%; object-fit: contain; }
+.list-layout .window-card { min-height: 0; }
+.list-layout .window-card .preview-frame { width: 42px; height: 100%; }
+.list-layout .window-card .window-hint { margin: 0; top: 50%; left: 7px; position: absolute; transform: translateY(-50%); }
+.list-layout .window-card .window-meta { height: 100%; }
+.native-preview-area { inset: 0; }
+.empty { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; }

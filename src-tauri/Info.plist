@@ -4,4 +4,5 @@
 <key>NSAccessibilityUsageDescription</key><string>BeaconHop reads window titles and focuses the window you select.</string>
 <key>NSScreenCaptureUsageDescription</key><string>BeaconHop shows local thumbnail previews of your open windows.</string>
 <key>LSUIElement</key><true/>
+  <key>CFBundleIconName</key><string>BeaconHop</string>
 </dict></plist>
