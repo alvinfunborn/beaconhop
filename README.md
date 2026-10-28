@@ -48,6 +48,8 @@ For UI-only preview, run `npm run dev` and open `http://127.0.0.1:1437/?preview=
 
 The project keeps its own application identity (`com.beaconhop.app`) and configuration, separate from Screen Buoy. Set `BEACONHOP_DATA_DIR` to an isolated directory for native tests. Settings can be inspected in the app's System & access → Diagnostics section.
 
+The [branding guide](docs/branding.md) describes the window-stack logo and `npm run icons` asset generation.
+
 ## Architecture
 
 - `src-tauri/src/engine.rs`: platform-independent selection, stable hints, MRU, scopes, key release ownership, and search.

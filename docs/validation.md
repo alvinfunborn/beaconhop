@@ -47,6 +47,16 @@ done
 python3 scripts/macos-edge-qa.py
 ```
 
+## Window-stack branding and local installation
+
+The 2026-10-28 branding update replaces the letter B with three rising windows, a fading violet motion trail and an amber H hint key. SVG, Windows PNG/ICO and native macOS ICNS assets were regenerated. The macOS icon uses Icon Composer's native silhouette with 824-pixel artwork on a 1024-pixel transparent canvas. The menu bar now uses a monochrome window-stack template instead of the full-color app icon. Visual checks covered 16/32/64/128/256 pixels and light/dark menu bar backgrounds.
+
+The updated TypeScript/Vite and macOS release app/DMG builds passed, as did Rust formatting, Git whitespace checks, strict bundle signature validation and DMG checksum verification. The app was installed and launched at `/Applications/BeaconHop.app`; the installed executable SHA-256 and ICNS match the packaged app. Evidence is in `logs/macos-install.json` and `logs/logo-size-review.png`.
+
+Installed-app diagnostics confirmed Accessibility access, an active native keyboard hook, 11 inventoried windows across two displays, and no warnings. Native Cmd+backquote opened the installed switcher; Escape returned to settings. AltTab was temporarily quit to avoid competing shortcuts. At this handoff, Input Monitoring and Screen Recording were not enabled; the keyboard hook was active through Accessibility, while thumbnails still required Screen Recording approval. The settings window was left open on System & access, and the screen-capture permission request was issued from BeaconHop's own button.
+
+The existing Windows EXE/installer predates this branding update; Windows icon sources are updated, but that package has not been rebuilt in this macOS installation follow-up.
+
 ## Remaining acceptance
 
 **Windows native execution is pending an accessible Windows machine or VM.** Compilation and installer generation do not prove hook interception, DWM preview composition, focus transfer, virtual desktop compatibility, high DPI behavior or installation. Initial desktop-switching support follows `winvd` 0.0.49: Windows 11 24H2 build 26100.2605 or later (upstream also reports testing 25H2 build 26200.8117). Older Windows versions are not accepted targets yet.

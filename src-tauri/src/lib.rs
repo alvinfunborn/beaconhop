@@ -45,8 +45,14 @@ pub fn run() {
             let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit BeaconHop", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&search, &settings, &quit])?;
+            #[cfg(target_os = "macos")]
+            let tray_icon =
+                tauri::image::Image::from_bytes(include_bytes!("../icons/tray_icon.png"))?;
+            #[cfg(not(target_os = "macos"))]
+            let tray_icon = app.default_window_icon().unwrap().clone();
             TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(tray_icon)
+                .icon_as_template(cfg!(target_os = "macos"))
                 .tooltip("BeaconHop")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
