@@ -227,23 +227,42 @@ private extension CGRect { var area: Double { isNull ? 0 : width * height } }
     }
     return strdup("macOS did not focus the requested window. Check Accessibility and desktop switching permissions.")
 }
-@_cdecl("bh_thumbnail") public func bhThumbnail(_ id: UInt32) -> UnsafeMutablePointer<CChar>? {
-    if !CGPreflightScreenCaptureAccess() {return nil}
-    let semaphore = DispatchSemaphore(value:0)
-    let lock = NSLock(); var data: Data?
-    SCShareableContent.getExcludingDesktopWindows(true,onScreenWindowsOnly:false) { content,error in
-        guard let window = content?.windows.first(where:{$0.windowID==id}) else {semaphore.signal();return}
-        let config = SCStreamConfiguration(); config.width = 480; config.height = max(1,Int(480 * window.frame.height / max(1,window.frame.width))); config.showsCursor = false
-        config.scalesToFit = true; config.captureResolution = .nominal
-        let filter = SCContentFilter(desktopIndependentWindow:window)
-        SCScreenshotManager.captureImage(contentFilter:filter,configuration:config) { image,error in
-            if let image { let rep = NSBitmapImageRep(cgImage:image); lock.lock(); data = rep.representation(using:.png,properties:[:]); lock.unlock() }
-            semaphore.signal()
+// One shareable-content query per batch, with at most four screenshot requests in flight.
+// Called off the event tap and main thread; timed-out callbacks own their state safely.
+@_cdecl("bh_thumbnails") public func bhThumbnails(_ raw: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
+    guard CGPreflightScreenCaptureAccess(), let raw,
+          let input = String(cString:raw).data(using:.utf8),
+          let ids = try? JSONDecoder().decode([UInt32].self,from:input) else {return nil}
+    let contentReady = DispatchSemaphore(value:0), contentLock = NSLock()
+    var shared: SCShareableContent?
+    SCShareableContent.getExcludingDesktopWindows(true,onScreenWindowsOnly:false) { content,_ in
+        contentLock.lock(); shared = content; contentLock.unlock(); contentReady.signal()
+    }
+    guard contentReady.wait(timeout:.now()+1.5) == .success else {return nil}
+    contentLock.lock(); let content = shared; contentLock.unlock()
+    guard let content else {return nil}
+    let wanted = Set(ids), windows = content.windows.filter{wanted.contains($0.windowID)}
+    let group = DispatchGroup(), slots = DispatchSemaphore(value:4), lock = NSLock()
+    var images = [String:String]()
+    for window in windows {
+        group.enter()
+        DispatchQueue.global(qos:.userInitiated).async {
+            guard slots.wait(timeout:.now()+2) == .success else {group.leave();return}
+            let config = SCStreamConfiguration()
+            let factor = min(1,512 / max(1,max(window.frame.width,window.frame.height)))
+            config.width = max(1,Int(window.frame.width * factor)); config.height = max(1,Int(window.frame.height * factor))
+            config.showsCursor = false; config.scalesToFit = true; config.captureResolution = .nominal
+            SCScreenshotManager.captureImage(contentFilter:SCContentFilter(desktopIndependentWindow:window),configuration:config) { image,_ in
+                if let image, let data = NSBitmapImageRep(cgImage:image).representation(using:.jpeg,properties:[.compressionFactor:0.78]) {
+                    lock.lock(); images[String(window.windowID)] = "data:image/jpeg;base64," + data.base64EncodedString(); lock.unlock()
+                }
+                slots.signal(); group.leave()
+            }
         }
     }
-    if semaphore.wait(timeout:.now()+2) == .timedOut {return nil}
-    lock.lock(); defer {lock.unlock()}; guard let data else {return nil}
-    return strdup("data:image/png;base64," + data.base64EncodedString())
+    _ = group.wait(timeout:.now()+2.5)
+    lock.lock(); let result = images; lock.unlock()
+    return json(result)
 }
 @_cdecl("bh_screen_permission") public func bhScreenPermission(_ request: Bool) -> Bool { request ? CGRequestScreenCaptureAccess() : CGPreflightScreenCaptureAccess() }
 @_cdecl("bh_panel") public func bhPanel(_ raw: UnsafeMutableRawPointer?, _ search: Bool) {

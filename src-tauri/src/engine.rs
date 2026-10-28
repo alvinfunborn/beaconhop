@@ -36,6 +36,9 @@ pub struct Engine {
     drain_modifiers: u8,
     serial: u64,
     pending_focus: Option<(u64, String)>,
+    search_index: HashMap<String, crate::search::SearchText>,
+    pub hints: crate::stable_hints::StableHints,
+    pub navigation: HashMap<String, Bounds>,
 }
 impl Engine {
     pub fn new(config: Config) -> Self {
@@ -48,6 +51,9 @@ impl Engine {
             drain_modifiers: 0,
             serial: 0,
             pending_focus: None,
+            search_index: HashMap::new(),
+            hints: Default::default(),
+            navigation: HashMap::new(),
         }
     }
     pub fn observe_focus(&mut self, id: Option<String>) {
@@ -82,6 +88,26 @@ impl Engine {
         self.observe_focus(snapshot.focused_id.clone());
         let live: HashSet<_> = snapshot.windows.iter().map(|w| &w.id).collect();
         self.mru.retain(|id| live.contains(id));
+        self.search_index.retain(|id, _| live.contains(id));
+        for w in &snapshot.windows {
+            let source = format!("{} {}", w.app_name, w.title);
+            if self
+                .search_index
+                .get(&w.id)
+                .is_none_or(|index| index.source != source)
+            {
+                self.search_index
+                    .insert(w.id.clone(), crate::search::SearchText::new(source));
+            }
+        }
+        self.hints.sync(
+            &self.config.hint_alphabet,
+            &snapshot
+                .windows
+                .iter()
+                .map(|w| w.id.clone())
+                .collect::<Vec<_>>(),
+        );
         self.snapshot = snapshot;
     }
     pub fn open(&mut self, mode: Mode, reverse: bool) -> Vec<Action> {
@@ -119,16 +145,22 @@ impl Engine {
             .collect();
         let ranks: HashMap<_, _> = self.mru.iter().enumerate().map(|(i, id)| (id, i)).collect();
         windows.sort_by_key(|w| ranks.get(&w.id).copied().unwrap_or(usize::MAX));
-        let letters: Vec<_> = self.config.hint_alphabet.chars().collect();
-        let mut length = 1;
-        while letters.len().pow(length) < windows.len() {
-            length += 1;
-        }
-        let codes = crate::codes::generate(&vec![letters; length as usize], &[]);
+        self.hints.sync(
+            &self.config.hint_alphabet,
+            &self
+                .snapshot
+                .windows
+                .iter()
+                .map(|w| w.id.clone())
+                .collect::<Vec<_>>(),
+        );
+        self.navigation.clear();
         let items: Vec<_> = windows
             .into_iter()
-            .zip(codes)
-            .map(|(window, hint)| HintWindow { window, hint })
+            .map(|window| {
+                let hint = self.hints.get(&window.id);
+                HintWindow { window, hint }
+            })
             .collect();
         let selected = if items.is_empty() {
             None
@@ -181,6 +213,40 @@ impl Engine {
             Some(ids[(index as isize + delta).rem_euclid(ids.len() as isize) as usize].clone());
         self.session.revision += 1;
     }
+    pub fn navigate_direction(&mut self, direction: &str) {
+        if !matches!(
+            direction,
+            "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight"
+        ) {
+            return;
+        }
+        let target = self
+            .session
+            .selected
+            .as_ref()
+            .and_then(|id| self.navigation.get(id))
+            .and_then(|rect| {
+                crate::navigation::neighbor(
+                    rect,
+                    self.results().into_iter().filter_map(|w| {
+                        self.navigation
+                            .get(&w.window.id)
+                            .map(|b| (w.window.id.as_str(), b))
+                    }),
+                    direction,
+                )
+            });
+        if let Some(id) = target {
+            self.session.selected = Some(id);
+            self.session.revision += 1;
+        } else {
+            self.navigate(if matches!(direction, "ArrowLeft" | "ArrowUp") {
+                -1
+            } else {
+                1
+            });
+        }
+    }
     pub fn results(&self) -> Vec<&HintWindow> {
         self.session
             .windows
@@ -189,11 +255,18 @@ impl Engine {
                 if !w.hint.starts_with(&self.session.prefix) {
                     return None;
                 }
-                score(
-                    &format!("{} {}", w.window.app_name, w.window.title),
-                    &self.session.query,
-                )
-                .map(|_| w)
+                self.search_index
+                    .get(&w.window.id)
+                    .map_or_else(
+                        || {
+                            score(
+                                &format!("{} {}", w.window.app_name, w.window.title),
+                                &self.session.query,
+                            )
+                        },
+                        |index| index.score(&self.session.query),
+                    )
+                    .map(|_| w)
             })
             .collect()
     }
@@ -308,14 +381,14 @@ impl Engine {
                     self.session.revision += 1;
                     response.actions = vec![Action::Search, Action::Publish];
                 }
-                "Tab" | "ArrowRight" | "ArrowDown" => {
+                "Tab" => {
                     self.session.prefix.clear();
                     self.navigate(if event.modifiers & SHIFT != 0 { -1 } else { 1 });
                     response.actions.push(Action::Publish);
                 }
-                "ArrowLeft" | "ArrowUp" => {
+                "ArrowLeft" | "ArrowUp" | "ArrowRight" | "ArrowDown" => {
                     self.session.prefix.clear();
-                    self.navigate(-1);
+                    self.navigate_direction(&event.key);
                     response.actions.push(Action::Publish);
                 }
                 "Enter" => {
@@ -368,27 +441,7 @@ impl Engine {
 }
 
 pub fn score(text: &str, query: &str) -> Option<i64> {
-    let hay = text.to_lowercase();
-    let needle = query.trim().to_lowercase();
-    if needle.is_empty() {
-        return Some(0);
-    }
-    // A full title/phrase match outranks independently matching its words elsewhere.
-    let mut total = hay.find(&needle).map(|i| 10_000 - i as i64).unwrap_or(0);
-    for word in needle.split_whitespace() {
-        if let Some(i) = hay.find(word) {
-            total += 1000 - i as i64;
-            continue;
-        }
-        let mut chars = hay.char_indices();
-        let mut last = 0;
-        for c in word.chars() {
-            let (i, _) = chars.find(|(_, h)| *h == c)?;
-            total += 10 - (i - last) as i64;
-            last = i;
-        }
-    }
-    Some(total)
+    crate::search::SearchText::new(text.into()).score(query)
 }
 
 #[cfg(test)]
@@ -502,7 +555,14 @@ mod tests {
     fn incomplete_hint_release_cancels() {
         let mut e = engine(30);
         e.handle(key("Tab", ALT, true));
-        let first = e.session.windows[0].hint[..1].to_string();
+        let first = e
+            .session
+            .windows
+            .iter()
+            .find(|w| w.hint.len() > 1)
+            .unwrap()
+            .hint[..1]
+            .to_string();
         e.handle(key(&first, ALT, true));
         assert!(matches!(
             &e.handle(key("Alt", 0, false)).actions[0],
@@ -523,6 +583,58 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["0", "6"]
         );
+    }
+    #[test]
+    fn hints_follow_identity_across_mru_scope_and_inventory_changes() {
+        let mut e = engine(5);
+        e.open(Mode::Held, false);
+        let before: HashMap<_, _> = e
+            .session
+            .windows
+            .iter()
+            .map(|w| (w.window.id.clone(), w.hint.clone()))
+            .collect();
+        e.session.mode = Mode::Inactive;
+        e.observe_focus(Some("4".into()));
+        let mut snapshot = e.snapshot.clone();
+        snapshot.windows.reverse();
+        snapshot.windows[0].title = "Renamed".into();
+        e.update(snapshot);
+        e.config.display_scope = Scope::Current;
+        e.open(Mode::Held, false);
+        for w in &e.session.windows {
+            assert_eq!(before[&w.window.id], w.hint);
+        }
+    }
+    #[test]
+    fn held_arrow_keys_use_the_visible_card_geometry_and_do_not_leak() {
+        let mut e = engine(4);
+        e.open(Mode::Held, false);
+        e.session.selected = Some("0".into());
+        e.navigation = (0..4)
+            .map(|i| {
+                (
+                    i.to_string(),
+                    Bounds {
+                        x: (i % 2) as f64 * 200.,
+                        y: (i / 2) as f64 * 120.,
+                        width: 180.,
+                        height: 100.,
+                    },
+                )
+            })
+            .collect();
+        for (direction, wanted) in [
+            ("ArrowRight", "1"),
+            ("ArrowDown", "3"),
+            ("ArrowLeft", "2"),
+            ("ArrowUp", "0"),
+        ] {
+            let response = e.handle(key(direction, ALT, true));
+            assert!(response.consumed);
+            assert_eq!(e.session.selected.as_deref(), Some(wanted));
+            assert!(e.handle(key(direction, ALT, false)).consumed);
+        }
     }
     #[test]
     fn hints_are_stable_and_closed_targets_cannot_be_reused() {
@@ -554,6 +666,36 @@ mod tests {
         assert!(score("Visual Studio Code", "vsc").is_some());
         assert!(score("Terminal BeaconHop", "term beacon").is_some());
         assert_eq!(score("Terminal", "xyzz"), None);
+    }
+
+    #[test]
+    fn pinyin_index_tracks_renamed_and_closed_windows_without_changing_mru() {
+        let mut e = engine(3);
+        let mut snapshot = e.snapshot.clone();
+        snapshot.windows[0].title = "微信 产品设计".into();
+        snapshot.windows[1].title = "微信 重庆银行".into();
+        e.update(snapshot);
+        e.observe_focus(Some("1".into()));
+        e.open(Mode::Search, false);
+        e.search("wx".into());
+        assert_eq!(
+            e.results()
+                .iter()
+                .map(|w| w.window.id.as_str())
+                .collect::<Vec<_>>(),
+            ["1", "0"]
+        );
+        e.session.mode = Mode::Inactive;
+        let mut snapshot = e.snapshot.clone();
+        snapshot.windows[0].title = "项目计划".into();
+        snapshot.windows.retain(|w| w.id != "1");
+        e.update(snapshot);
+        e.open(Mode::Search, false);
+        e.search("wx".into());
+        assert!(e.results().is_empty());
+        e.search("xmjh".into());
+        assert_eq!(e.results()[0].window.id, "0");
+        assert!(!e.search_index.contains_key("1"));
     }
 
     #[test]
@@ -636,21 +778,29 @@ mod edge_tests {
             })
             .collect();
         e.open(Mode::Held, false);
+        let prefix = e
+            .session
+            .windows
+            .iter()
+            .find(|w| w.hint.len() > 1)
+            .unwrap()
+            .hint[..1]
+            .to_string();
         e.handle(KeyEvent {
-            key: "A".into(),
+            key: prefix.clone(),
             code: 0,
             modifiers: ALT,
             down: true,
             repeat: false,
         });
         e.handle(KeyEvent {
-            key: "A".into(),
+            key: prefix.clone(),
             code: 0,
             modifiers: ALT,
             down: true,
             repeat: true,
         });
         assert_eq!(e.session.mode, Mode::Held);
-        assert_eq!(e.session.prefix, "A");
+        assert_eq!(e.session.prefix, prefix);
     }
 }

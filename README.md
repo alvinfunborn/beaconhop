@@ -7,17 +7,19 @@ BeaconHop is a window navigator for macOS and Windows, adapted from [Screen Buoy
 ## Interaction
 
 - **Alt + Tab**: hold Alt to see windows. Tab / Shift + Tab cycle through recent windows. Release Alt to switch.
-- **Type a complete hint while holding**: immediately activate that exact window. Hints stay fixed for the invocation.
+- **Type a complete hint while holding**: immediately activate that exact window. Hints follow native window identity and stay stable through sorting, filtering and BeaconHop restarts. Closed/recreated windows receive a new allocation.
 - **Backslash (`\`)**: enter persistent search; you can release Alt.
 - **Cmd + ` on macOS / Win + ` on Windows**: open search directly. Both shortcut editors include recording, manual entry, restore-default actions and same-shortcut feedback. Win + backslash is also supported.
-- Search accepts Chinese input methods. Enter during composition confirms text instead of switching windows.
-- Escape cancels. Click a card to switch. Minimized windows are restored.
+- Search accepts Chinese text, full pinyin, initials, common polyphonic readings and mixed Chinese/Latin terms; Latin accents and full-width letters are normalized. For example, `weixin` / `wx` match 微信, and `chongqing` matches 重庆. Chinese IME composition confirms text before Enter can switch windows.
+- All four arrow keys navigate by the visible card positions in both hold and search modes. Tab / Shift + Tab retain recent-window order. Escape cancels. Click a card to switch. Minimized windows are restored.
 
 Both shortcuts are configurable. Desktop and display scopes are independent. Cross-desktop navigation follows a window to its existing desktop; it never moves the window.
 
 ## Status and systems
 
-The overview fits every matching window on screen without scrolling, keeps each preview’s window aspect ratio, and orders windows by most recent use, including filtered search results.
+The overview sizes itself to the window inventory, fits every matching window without scrolling, preserves preview aspect ratios, and keeps recent windows first even when filtering. A lightly translucent panel uses native macOS vibrancy / Windows Acrylic behind the content. Centered amber hint badges stay opaque and visible on bright and dark thumbnails. Search keeps the current panel size to avoid movement while typing.
+
+macOS captures previews in bounded parallel batches using one shareable-window query, decodes them before publishing a batch, and reuses an in-memory cache. It warms the initial inventory and refreshes the foreground window after focus changes. Settings includes a persistent restart button; save or discard edits before restarting.
 
 Version 0.1.0 has local macOS app/DMG and Windows EXE/NSIS builds. macOS native validation includes 100 repeated round trips, two displays, multiple Spaces, same-title windows, closed targets and WeType Chinese input; Windows runtime acceptance is pending an accessible test machine. These are development distributions: macOS is ad-hoc signed and not notarized; Windows is unsigned. See [validation](docs/validation.md) for the evidence and remaining checks.
 
@@ -28,7 +30,7 @@ Version 0.1.0 has local macOS app/DMG and Windows EXE/NSIS builds. macOS native 
 
 On macOS, missing Accessibility opens the permission setup in the foreground at startup, including background launches. Other settings pages keep a visible access banner. Shortcut configuration can still be entered manually and saved before granting access.
 
-Window metadata, settings and previews are processed locally. Preview pixels are cached only in memory. No analytics, network search, or screenshot upload is included.
+Window metadata, settings and previews are processed locally. Stable hint assignments are saved locally in `hints.json`, keyed by native window identity; closed-window mappings are pruned. Preview pixels are cached only in memory. No analytics, network search, or screenshot upload is included.
 
 ## Development
 

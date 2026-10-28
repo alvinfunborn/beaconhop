@@ -78,11 +78,9 @@ test("search navigation and empty results are accessible", async ({ page }) => {
   await expect(page.getByText("No matching windows")).toBeVisible();
   await page.getByRole("textbox").fill("");
   await page.getByRole("textbox").press("ArrowRight");
-  await expect(page.locator('[aria-selected="true"]')).toContainText("Figma");
+  await expect(page.locator('[aria-selected="true"]')).toContainText("Visual Studio Code");
   await page.getByRole("textbox").press("Tab");
-  await expect(page.locator('[aria-selected="true"]')).toContainText(
-    "Visual Studio Code",
-  );
+  await expect(page.locator('[aria-selected="true"]')).toContainText("Safari");
 });
 test("settings and light theme fit the minimum window without horizontal scrolling", async ({
   page,
@@ -245,4 +243,96 @@ test("missing access opens setup, stays visible on other pages and refreshes aft
   await expect(page.getByRole("alert")).toHaveCount(0);
   await expect(page.locator(".sidebar-bottom")).toContainText("Ready to hop");
   await expect(page.getByRole("button", { name: "Shortcuts", exact: true })).toHaveAttribute("aria-current", "page");
+});
+
+test("hints stay centered with strong contrast on light and dark thumbnail content", async ({ page }) => {
+  await page.goto("/?preview=1&view=switcher");
+  for (const background of ["#ffffff", "#111111"]) {
+    await page.locator(".preview-frame").evaluateAll((nodes, background) => nodes.forEach(node => (node as HTMLElement).style.background = background), background);
+    const hints = await page.locator(".window-hint").evaluateAll(nodes => nodes.map(node => {
+      const r = node.getBoundingClientRect(), p = node.parentElement!.getBoundingClientRect(), style = getComputedStyle(node);
+      return { dx: Math.abs(r.x+r.width/2-p.x-p.width/2),dy:Math.abs(r.y+r.height/2-p.y-p.height/2),bg:style.backgroundColor,fg:style.color };
+    }));
+    expect(hints.length).toBe(6);
+    for (const hint of hints) {
+      expect(hint.dx).toBeLessThan(1);expect(hint.dy).toBeLessThan(1);
+      expect(hint.bg).toBe("rgb(255, 207, 72)");expect(hint.fg).toBe("rgb(25, 19, 10)");
+    }
+  }
+  await page.screenshot({path:"logs/hints-centered-contrast.png"});
+});
+
+test("a cached thumbnail batch appears while refresh waits and stale sessions cannot publish", async ({ page }) => {
+  await page.route("**/src/api.ts", async route => {
+    const response = await route.fetch();
+    const extra = `
+const pixel = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="50"><rect width="80" height="50" fill="gold"/></svg>');
+const originalCall = call;
+call = async function(name, args = {}) {
+ if (name === 'get_thumbnail') throw new Error('Per-card requests are forbidden');
+ if (name === 'get_cached_thumbnails') return Object.fromEntries(args.ids.map(id => [id,pixel]));
+ if (name === 'get_thumbnails') { globalThis.__batchCount = (globalThis.__batchCount || 0)+1;
+  await new Promise(resolve => globalThis.__finishPreviews = resolve);
+  return Object.fromEntries(args.ids.map(id => [id,pixel+'#fresh']));
+ }
+ return originalCall(name,args);
+};`;
+    await route.fulfill({response,body:(await response.text())+extra});
+  });
+  await page.goto("/?preview=1&view=switcher");
+  await expect(page.locator(".window-preview")).toHaveCount(6);
+  expect(await page.evaluate(() => (window as any).__batchCount)).toBe(1);
+  await page.evaluate(async () => {
+    const api = await import("/src/api.ts" as string);
+    await api.call("open_search");
+  });
+  await expect(page.getByRole("textbox",{name:"Search windows",exact:true})).toBeVisible();
+  await page.evaluate(async () => {
+    const api = await import("/src/api.ts" as string);
+    await api.call("cancel");
+  });
+  await expect(page.getByRole("textbox",{name:"Search windows",exact:true})).toHaveCount(0);
+  await page.evaluate(() => {
+    (window as any).__finishPreviews();
+  });
+  await page.waitForTimeout(100);
+  expect(await page.locator(".window-preview").first().getAttribute("src")).not.toContain("#fresh");
+});
+
+test("settings restart stays visible and protects unsaved changes", async ({ page }) => {
+  await page.goto("/?preview=1");
+  const restart=page.getByRole("button",{name:"Restart BeaconHop",exact:true});
+  await expect(restart).toBeInViewport();await expect(restart).toBeEnabled();
+  await page.getByRole("button",{name:"Restore default Search shortcut",exact:true}).click();
+  await page.getByRole("button",{name:"Enter Search shortcut manually",exact:true}).click();
+  await page.getByRole("textbox",{name:"Search shortcut text",exact:true}).fill("Ctrl+Q");
+  await page.getByRole("button",{name:"Apply",exact:true}).click();
+  await expect(restart).toBeDisabled();
+  await page.getByRole("button",{name:"Discard",exact:true}).click();
+  await expect(restart).toBeEnabled();
+  await restart.click();await expect(page.getByRole("status").filter({hasText:"Restarting"})).toBeVisible();
+});
+
+test("small adaptive panels keep cards and controls visible", async ({ page }) => {
+  await page.route("**/src/api.ts", async route => {
+    const response=await route.fetch();
+    await route.fulfill({response,body:(await response.text())+`\nsession.windows=session.windows.slice(0,1);session.resultIds=['0'];`});
+  });
+  await page.setViewportSize({width:460,height:396});
+  await page.goto("/?preview=1&view=switcher");
+  await expect(page.getByRole("option")).toBeInViewport({ratio:1});
+  await expect(page.getByRole("button",{name:"Close",exact:true})).toBeInViewport({ratio:1});
+  expect(await page.locator(".switcher-footer").evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+  await page.screenshot({path:"logs/small-adaptive-panel.png"});
+});
+
+
+test("all four arrows navigate the visual grid from the search field",async ({page})=>{
+  await page.goto("/?preview=1&view=switcher");
+  await page.evaluate(async ()=>{const api=await import("/src/api.ts" as string);await api.call("open_search");await api.call("search",{query:""});});
+  const input=page.getByRole("textbox",{name:"Search windows"});
+  for (const [key,app] of [["ArrowRight","Visual Studio Code"],["ArrowDown","Notes"],["ArrowLeft","Terminal"],["ArrowUp","Figma"]]) {
+    await input.press(key);await expect(page.locator('[aria-selected="true"]')).toContainText(app);
+  }
+  expect(await page.locator(".switcher").evaluate(el=>getComputedStyle(el).backdropFilter)).toContain("blur");
 });

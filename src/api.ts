@@ -23,6 +23,7 @@ export const defaults: Config = {
   startInTray: false,
   excludedApps: [],
 };
+let rectangles: Record<string,{x:number;y:number;width:number;height:number}> = {};
 const listeners = new Map<string, Set<(v: any) => void>>();
 let config = { ...defaults };
 let session: Session = {
@@ -122,6 +123,18 @@ export async function call<T>(
       session.revision++;
       emit("session", session);
       break;
+    case "set_navigation": rectangles=args.rectangles as typeof rectangles; break;
+    case "navigate_direction": {
+      const direction=String(args.direction),current=rectangles[session.selected ?? ""];
+      const vertical=["ArrowUp","ArrowDown"].includes(direction),positive=["ArrowRight","ArrowDown"].includes(direction);
+      const options=current ? session.resultIds.filter(id=>rectangles[id]).map(id=> {
+        const b=rectangles[id],dx=b.x+b.width/2-current.x-current.width/2,dy=b.y+b.height/2-current.y-current.height/2;
+        return {id,axis:vertical?dy:dx,cross:Math.abs(vertical?dx:dy),height:b.height};
+      }).filter(c=>(positive?c.axis>.5:c.axis<-.5)&&(vertical||c.cross<=Math.max(current.height,c.height)/2))
+        .sort((a,b)=>Math.abs(a.axis)-Math.abs(b.axis)||a.cross-b.cross) : [];
+      const fallback=session.resultIds[(session.resultIds.indexOf(session.selected ?? "")+(positive?1:-1)+session.resultIds.length)%session.resultIds.length];
+      session.selected=options[0]?.id ?? fallback;session.revision++;emit("session",session);break;
+    }
     case "navigate": {
       const i = session.resultIds.indexOf(session.selected ?? "");
       session.selected =
@@ -139,8 +152,9 @@ export async function call<T>(
       session.revision++;
       emit("session", session);
       break;
-    case "get_thumbnail":
-      value = null;
+    case "get_cached_thumbnails":
+    case "get_thumbnails":
+      value = {};
       break;
   }
   return structuredClone(value) as T;

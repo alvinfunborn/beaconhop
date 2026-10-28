@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import type { Config, Session, Permissions, Destination } from "./types";
 import { call, subscribe, defaults, native, preview } from "./api";
 import { tileWindows, type Tile } from "./layout";
+import { usePreviews } from "./previews";
 const isMac = navigator.platform.toLowerCase().includes("mac");
 const windowsNative =
   native && navigator.platform.toLowerCase().includes("win");
@@ -711,6 +712,12 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                   ))}
           </span>
           <div>
+            <button className="button ghost" disabled={dirty || busy}
+              title={dirty ? t("Save or discard your changes before restarting", "请先保存或撤销修改，再重启") : undefined}
+              onClick={async () => {
+                try { setNotice(t("Restarting…", "正在重启…")); await call("restart_application"); }
+                catch (e) { setError(String(e)); }
+              }}>{t("Restart BeaconHop", "重启 BeaconHop")}</button>
             <button
               className="button ghost"
               disabled={!dirty || busy}
@@ -892,6 +899,12 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
           session.resultIds.indexOf(a.id) - session.resultIds.indexOf(b.id),
       ) ?? [];
   const tiles = useMemo(() => tileWindows(visible, available.width, available.height, config.layout === "list"), [session, available, config.layout]);
+  const images = usePreviews(session, config.thumbnails && config.layout === "grid" && !windowsNative);
+  useEffect(() => {
+    if (!session || session.mode === "inactive" || !tiles.tiles.length) return;
+    const rectangles=Object.fromEntries(visible.map((w,i)=>[w.id,tiles.tiles[i]]).filter(([,tile])=>!!tile));
+    call("set_navigation", {sessionId:session.sessionId,rectangles}).catch(()=>{});
+  }, [session,tiles]);
   const isSearch = session?.mode === "search";
   return (
     <div
@@ -920,23 +933,9 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
             e.key,
           )
         ) {
-          if (
-            e.target instanceof HTMLInputElement &&
-            ["ArrowLeft", "ArrowRight"].includes(e.key)
-          )
-            return;
           e.preventDefault();
-          const columns = tiles.columns;
-          let delta =
-            ["ArrowUp", "ArrowLeft"].includes(e.key) ||
-            (e.key === "Tab" && e.shiftKey)
-              ? -1
-              : 1;
-          if (
-            ["ArrowUp", "ArrowDown"].includes(e.key)
-          )
-            delta *= columns;
-          action("navigate", { delta, sessionId: session?.sessionId });
+          if (e.key === "Tab") action("navigate", {delta:e.shiftKey ? -1 : 1,sessionId:session?.sessionId});
+          else action("navigate_direction", {direction:e.key,sessionId:session?.sessionId});
         }
       }}
     >
@@ -947,7 +946,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
             <input
               ref={input}
               aria-label={t("Search windows", "搜索窗口")}
-              placeholder={t("Where do you want to go?", "想去哪个工作现场？")}
+              placeholder={t("Title, app or Chinese pinyin / initials", "搜索标题、应用名、拼音或首字母") }
               value={query}
               onCompositionStart={() => {
                 composing.current = true;
@@ -1017,6 +1016,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
           <WindowCard
             key={`${session?.sessionId}:${w.id}`}
             window={w}
+            image={images[w.id] ?? null}
             tile={tiles.tiles[index]}
             selected={w.id === session?.selected}
             thumbnails={config.thumbnails && config.layout === "grid"}
@@ -1053,12 +1053,11 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
           BeaconHop{preview ? " · Preview" : ""}
         </span>
         <div>
+          <span>
+            <kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> {t("navigate", "选择")}
+          </span>
           {isSearch ? (
             <>
-              <span>
-                <kbd>↑</kbd>
-                <kbd>↓</kbd> {t("navigate", "选择")}
-              </span>
               <span>
                 <kbd>↵</kbd> {t("hop", "跳转")}
               </span>
@@ -1083,6 +1082,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
 }
 function WindowCard({
   window: w,
+  image,
   tile,
   selected,
   thumbnails,
@@ -1092,6 +1092,7 @@ function WindowCard({
   zh,
 }: {
   window: Destination;
+  image: string | null;
   tile?: Tile;
   selected: boolean;
   thumbnails: boolean;
@@ -1100,31 +1101,8 @@ function WindowCard({
   onSelect: () => void;
   zh: boolean;
 }) {
-  const [image, setImage] = useState<string | null>(null);
   const previewArea = useRef<HTMLDivElement>(null);
   const element = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (!thumbnails || !element.current || windowsNative) return;
-    let alive = true;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) {
-          observer.disconnect();
-          call<string | null>("get_thumbnail", { id: w.id })
-            .then((image) => {
-              if (alive) setImage(image);
-            })
-            .catch(() => {});
-        }
-      },
-      { rootMargin: "60px" },
-    );
-    observer.observe(element.current);
-    return () => {
-      alive = false;
-      observer.disconnect();
-    };
-  }, [w.id, thumbnails, sessionId]);
   useEffect(() => {
     if (!windowsNative || !thumbnails || !previewArea.current) return;
     const node = previewArea.current;
@@ -1145,8 +1123,11 @@ function WindowCard({
                 height: r.height * scale,
               }
             : null;
+        const hint = element.current?.querySelector(".window-hint")?.getBoundingClientRect();
+        const hintBounds = hint ? { x: (hint.x - 3) * scale, y: (hint.y - 3) * scale,
+          width: (hint.width + 6) * scale, height: (hint.height + 6) * scale } : null;
         if (alive)
-          call("set_live_preview", { id: w.id, sessionId, bounds }).catch(
+          call("set_live_preview", { id: w.id, sessionId, bounds, hintBounds }).catch(
             () => {},
           );
       });
@@ -1162,7 +1143,7 @@ function WindowCard({
       observer.disconnect();
       window.removeEventListener("scroll", update, true);
       window.removeEventListener("resize", update);
-      call("set_live_preview", { id: w.id, sessionId, bounds: null }).catch(
+      call("set_live_preview", { id: w.id, sessionId, bounds: null, hintBounds: null }).catch(
         () => {},
       );
     };
@@ -1176,7 +1157,7 @@ function WindowCard({
       className={"window-card " + (selected ? "selected " : "") + (tile && tile.meta < 40 ? "dense" : "")}
       style={tile ? { left: tile.x + 14, top: tile.y + 14, width: tile.width, height: tile.height,
         "--tile-preview": `${tile.preview}px`, "--tile-meta": `${tile.meta}px`,
-        "--hint-size": `${Math.min(17, Math.max(9, tile.preview / 5))}px`,
+        "--hint-size": `${Math.min(28, Math.max(10, tile.preview / 5))}px`,
       } as CSSProperties : { visibility: "hidden" }}
       onClick={onSelect}
       title={`${w.appName} — ${w.title}`}

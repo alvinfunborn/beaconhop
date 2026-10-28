@@ -99,9 +99,11 @@ pub fn init(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     }
     let show = first || !config.start_in_tray && !std::env::args().any(|a| a == "--background");
     let (sender, receiver) = mpsc::channel();
+    let mut engine = Engine::new(config.clone());
+    engine.hints = crate::stable_hints::StableHints::load(&directory.join("hints.json"));
     let runtime = Arc::new(Runtime {
         app: app.clone(),
-        engine: Mutex::new(Engine::new(config)),
+        engine: Mutex::new(engine),
         sender,
         config_path: path,
         previews: Mutex::new(HashMap::new()),
@@ -134,7 +136,22 @@ pub fn init(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     let mut e = rt().engine.lock().unwrap();
                     snapshot.focused_id = e.snapshot.focused_id.clone();
                     e.update(snapshot);
+                    let learned = if e.hints.dirty {
+                        e.hints.dirty = false;
+                        serde_json::to_vec(&e.hints).ok()
+                    } else {
+                        None
+                    };
                     drop(e);
+                    if let Some(data) = learned {
+                        let path = rt().config_path.with_file_name("hints.json");
+                        let pending = path.with_extension("pending");
+                        if let Err(error) = std::fs::write(&pending, data)
+                            .and_then(|_| std::fs::rename(&pending, &path))
+                        {
+                            log::warn!("Could not save stable hints: {error}");
+                        }
+                    }
                     #[cfg(debug_assertions)]
                     write_probe();
                 }
@@ -156,6 +173,48 @@ pub fn init(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .spawn(move || {
             for action in receiver {
                 perform(action);
+            }
+        })?;
+    #[cfg(target_os = "macos")]
+    std::thread::Builder::new()
+        .name("preview-warmup".into())
+        .spawn(move || {
+            let mut warmed = false;
+            let mut previous = None;
+            loop {
+                std::thread::sleep(Duration::from_millis(1000));
+                let (enabled, active, focused, windows) = {
+                    let e = rt().engine.lock().unwrap();
+                    (
+                        e.config.thumbnails && e.config.layout == "grid",
+                        e.session.mode != Mode::Inactive,
+                        e.snapshot.focused_id.clone(),
+                        e.snapshot.windows.clone(),
+                    )
+                };
+                if !enabled || !platform::permissions().screen_recording {
+                    warmed = false;
+                    rt().previews.lock().unwrap().clear();
+                    continue;
+                }
+                if active {
+                    continue;
+                }
+                let targets: Vec<_> = if !warmed {
+                    windows.into_iter().take(80).collect()
+                } else if focused != previous {
+                    windows
+                        .into_iter()
+                        .filter(|w| Some(&w.id) == focused.as_ref())
+                        .collect()
+                } else {
+                    vec![]
+                };
+                if !targets.is_empty() {
+                    capture_previews(&targets);
+                    warmed = true;
+                }
+                previous = focused;
             }
         })?;
     #[cfg(target_os = "macos")]
@@ -192,13 +251,20 @@ fn show(search: bool) {
         let scale = 1.; // macOS screen bounds are already logical points.
         #[cfg(target_os = "windows")]
         let scale = display.scale.max(1.);
-        let count = (session.windows.len() as f64).sqrt();
-        let width = ((800. + count * 100.) * scale)
-            .min(b.width - 64. * scale)
-            .max(1.);
-        let height = ((520. + count * 45.) * scale)
-            .min(b.height - 96. * scale)
-            .max(1.);
+        let windows: Vec<_> = session.windows.iter().map(|w| w.window.clone()).collect();
+        let compact = rt().engine.lock().unwrap().config.layout == "list";
+        let logical = Bounds {
+            width: b.width / scale,
+            height: b.height / scale,
+            ..Bounds::default()
+        };
+        let (width, height) = crate::panel::size(
+            &windows,
+            &logical,
+            compact,
+            session.warnings.len().min(3) as f64 * 36.,
+        );
+        let (width, height) = (width * scale, height * scale);
         #[cfg(target_os = "macos")]
         {
             let _ = window.set_size(tauri::LogicalSize::new(width, height));
@@ -322,8 +388,32 @@ pub fn get_settings() -> Config {
     rt().engine.lock().unwrap().config.clone()
 }
 #[tauri::command]
-pub fn restart_application() {
+pub fn restart_application() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(bundle) = executable
+            .ancestors()
+            .find(|p| p.extension().is_some_and(|e| e == "app"))
+        {
+            // Re-executing the binary bypasses Launch Services registration and
+            // can leave the replacement unable to activate its search window.
+            // Wait for this instance to exit before the single-instance plugin
+            // accepts the Launch Services replacement. Pass paths as arguments.
+            std::process::Command::new("/bin/sh")
+                .args(["-c", "i=0; while /bin/kill -0 \"$1\" 2>/dev/null && [ \"$i\" -lt 100 ]; do /bin/sleep 0.1; i=$((i+1)); done; exec /usr/bin/open -n \"$2\"", "beaconhop-relaunch"])
+                .arg(std::process::id().to_string())
+                .arg(bundle)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map_err(|error| format!("Could not restart BeaconHop: {error}"))?;
+            rt().app.exit(0);
+            return Ok(());
+        }
+    }
     rt().app.request_restart();
+    Ok(())
 }
 #[tauri::command]
 pub fn save_settings(config: Config) -> Result<Config, String> {
@@ -387,6 +477,32 @@ pub fn navigate(delta: isize, session_id: u64) {
     dispatch(vec![Action::Publish]);
 }
 #[tauri::command]
+pub fn set_navigation(session_id: u64, rectangles: HashMap<String, Bounds>) {
+    let mut e = rt().engine.lock().unwrap();
+    if e.session.session_id != session_id || e.session.mode == Mode::Inactive {
+        return;
+    }
+    e.navigation = rectangles
+        .into_iter()
+        .filter(|(id, b)| {
+            e.session.windows.iter().any(|w| &w.window.id == id)
+                && [b.x, b.y, b.width, b.height].iter().all(|n| n.is_finite())
+                && b.width > 0.
+                && b.height > 0.
+        })
+        .collect();
+}
+#[tauri::command]
+pub fn navigate_direction(direction: String, session_id: u64) {
+    let mut e = rt().engine.lock().unwrap();
+    if e.session.session_id != session_id || e.session.mode == Mode::Inactive {
+        return;
+    }
+    e.navigate_direction(&direction);
+    drop(e);
+    dispatch(vec![Action::Publish]);
+}
+#[tauri::command]
 pub fn activate(id: Option<String>, session_id: u64) {
     let mut e = rt().engine.lock().unwrap();
     if e.session.session_id == session_id && e.session.mode != Mode::Inactive {
@@ -407,46 +523,111 @@ pub fn get_permissions() -> PermissionStatus {
 pub fn request_permission(kind: String) -> Result<(), String> {
     platform::request_permission(&kind)
 }
+// Cache reads never wait behind a capture. Keep old images until their replacements are ready.
+fn preview_targets(ids: &[String], session_id: u64) -> Vec<Destination> {
+    let e = rt().engine.lock().unwrap();
+    if !e.config.thumbnails
+        || e.session.mode == Mode::Inactive
+        || e.session.session_id != session_id
+    {
+        return vec![];
+    }
+    e.session
+        .windows
+        .iter()
+        .filter(|w| ids.contains(&w.window.id))
+        .take(80)
+        .map(|w| w.window.clone())
+        .collect()
+}
+fn cached_previews(windows: &[Destination]) -> HashMap<String, String> {
+    let cache = rt().previews.lock().unwrap();
+    windows
+        .iter()
+        .filter_map(|w| {
+            cache
+                .get(&w.id)
+                .map(|(_, data)| (w.id.clone(), data.clone()))
+        })
+        .collect()
+}
+fn capture_previews(windows: &[Destination]) -> HashMap<String, String> {
+    let _capture = rt().capture.lock().unwrap();
+    if !platform::permissions().screen_recording {
+        rt().previews.lock().unwrap().clear();
+        return HashMap::new();
+    }
+    let stale: Vec<_> = {
+        let cache = rt().previews.lock().unwrap();
+        windows
+            .iter()
+            .filter(|w| {
+                cache
+                    .get(&w.id)
+                    .is_none_or(|(t, _)| t.elapsed() >= Duration::from_secs(3))
+            })
+            .cloned()
+            .collect()
+    };
+    if !stale.is_empty() {
+        let started = Instant::now();
+        let images = platform::thumbnails(&stale);
+        let captured = images.len();
+        let live: Vec<_> = rt()
+            .engine
+            .lock()
+            .unwrap()
+            .snapshot
+            .windows
+            .iter()
+            .map(|w| w.id.clone())
+            .collect();
+        let mut cache = rt().previews.lock().unwrap();
+        cache.retain(|id, _| live.contains(id));
+        for (id, data) in images {
+            cache.insert(id, (Instant::now(), data));
+        }
+        if cache.len() > 80 {
+            let mut oldest: Vec<_> = cache
+                .iter()
+                .map(|(id, (time, _))| (id.clone(), *time))
+                .collect();
+            oldest.sort_by_key(|(_, time)| *time);
+            for (id, _) in oldest.into_iter().take(cache.len() - 80) {
+                cache.remove(&id);
+            }
+        }
+        log::debug!(
+            "Preview batch: {captured}/{} in {}ms",
+            stale.len(),
+            started.elapsed().as_millis()
+        );
+    }
+    cached_previews(windows)
+}
 #[tauri::command]
-pub async fn get_thumbnail(id: String) -> Result<Option<String>, String> {
+pub fn get_cached_thumbnails(ids: Vec<String>, session_id: u64) -> HashMap<String, String> {
+    if !platform::permissions().screen_recording {
+        rt().previews.lock().unwrap().clear();
+        return HashMap::new();
+    }
+    cached_previews(&preview_targets(&ids, session_id))
+}
+#[tauri::command]
+pub async fn get_thumbnails(
+    ids: Vec<String>,
+    session_id: u64,
+) -> Result<HashMap<String, String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let runtime = rt();
-        let _capture = runtime.capture.lock().unwrap();
-        if let Some((time, data)) = runtime.previews.lock().unwrap().get(&id) {
-            if time.elapsed() < Duration::from_secs(3) {
-                return Ok(Some(data.clone()));
-            }
-        }
-        let target = {
-            let e = runtime.engine.lock().unwrap();
-            if !e.config.thumbnails || e.session.mode == Mode::Inactive {
-                return Ok(None);
-            }
-            e.snapshot.windows.iter().find(|w| w.id == id).cloned()
-        };
-        let Some(target) = target else {
-            return Ok(None);
-        };
-        let data = platform::thumbnail(&target);
-        if let Some(ref data) = data {
-            let mut cache = runtime.previews.lock().unwrap();
-            if cache.len() >= 80 {
-                cache.retain(|_, (t, _)| t.elapsed() < Duration::from_secs(3));
-                if cache.len() >= 80 {
-                    cache.clear();
-                }
-            }
-            cache.insert(id, (Instant::now(), data.clone()));
-        }
-        Ok(data)
+        capture_previews(&preview_targets(&ids, session_id))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 #[tauri::command]
 pub fn get_diagnostics() -> serde_json::Value {
     let e = rt().engine.lock().unwrap();
-    serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"platform":std::env::consts::OS,"permissions":platform::permissions(),"windowCount":e.snapshot.windows.len(),"displayCount":e.snapshot.displays.len(),"desktopKnown":e.snapshot.windows.iter().filter(|w|w.current_desktop.is_some()).count(),"warnings":e.snapshot.warnings,"configPath":rt().config_path,"sessionMode":e.session.mode})
+    serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"platform":std::env::consts::OS,"permissions":platform::permissions(),"previewCount":rt().previews.lock().unwrap().len(),"windowCount":e.snapshot.windows.len(),"displayCount":e.snapshot.displays.len(),"desktopKnown":e.snapshot.windows.iter().filter(|w|w.current_desktop.is_some()).count(),"warnings":e.snapshot.warnings,"configPath":rt().config_path,"sessionMode":e.session.mode})
 }
 
 #[tauri::command]
@@ -455,7 +636,12 @@ pub fn record_shortcut(enabled: bool) -> bool {
     crate::input::is_ready()
 }
 #[tauri::command]
-pub fn set_live_preview(id: String, session_id: u64, bounds: Option<Bounds>) -> bool {
+pub fn set_live_preview(
+    id: String,
+    session_id: u64,
+    bounds: Option<Bounds>,
+    hint_bounds: Option<Bounds>,
+) -> bool {
     let e = rt().engine.lock().unwrap();
     if e.session.session_id != session_id || e.session.mode == Mode::Inactive {
         return false;
@@ -473,7 +659,13 @@ pub fn set_live_preview(id: String, session_id: u64, bounds: Option<Bounds>) -> 
     let Some(panel) = rt().app.get_webview_window("switcher") else {
         return false;
     };
-    platform::live_preview(&panel, &format!("{session_id}:{id}"), &target, bounds)
+    platform::live_preview(
+        &panel,
+        &format!("{session_id}:{id}"),
+        &target,
+        bounds,
+        hint_bounds,
+    )
 }
 
 #[cfg(debug_assertions)]

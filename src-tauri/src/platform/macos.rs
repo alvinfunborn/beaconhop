@@ -4,7 +4,7 @@ extern "C" {
     fn bh_focused() -> *mut c_char;
     fn bh_snapshot() -> *mut c_char;
     fn bh_activate(pid: i32, id: u32) -> *mut c_char;
-    fn bh_thumbnail(id: u32) -> *mut c_char;
+    fn bh_thumbnails(ids: *const c_char) -> *mut c_char;
     fn bh_free(p: *mut c_char);
     fn bh_screen_permission(request: bool) -> bool;
     fn bh_panel(window: *mut c_void, search: bool);
@@ -32,8 +32,20 @@ pub fn activate(w: &Destination) -> Result<(), String> {
         Some(error) => Err(error),
     }
 }
-pub fn thumbnail(w: &Destination) -> Option<String> {
-    unsafe { string(bh_thumbnail(w.native_id as u32)) }
+pub fn thumbnails(windows: &[Destination]) -> std::collections::HashMap<String, String> {
+    let ids: Vec<_> = windows.iter().map(|w| w.native_id as u32).collect();
+    let json = std::ffi::CString::new(serde_json::to_string(&ids).unwrap()).unwrap();
+    let data: std::collections::HashMap<String, String> =
+        unsafe { string(bh_thumbnails(json.as_ptr())) }
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+    windows
+        .iter()
+        .filter_map(|w| {
+            data.get(&w.native_id.to_string())
+                .map(|image| (w.id.clone(), image.clone()))
+        })
+        .collect()
 }
 pub fn permissions() -> PermissionStatus {
     let accessibility = crate::macos_access::is_accessibility_trusted();
@@ -97,6 +109,12 @@ pub fn focus_settings(window: &tauri::WebviewWindow) {
     });
 }
 pub fn clear_previews() {}
-pub fn live_preview(_: &tauri::WebviewWindow, _: &str, _: &Destination, _: Option<Bounds>) -> bool {
+pub fn live_preview(
+    _: &tauri::WebviewWindow,
+    _: &str,
+    _: &Destination,
+    _: Option<Bounds>,
+    _: Option<Bounds>,
+) -> bool {
     false
 }

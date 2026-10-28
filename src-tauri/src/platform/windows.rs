@@ -408,6 +408,12 @@ pub fn activate(w: &Destination) -> Result<(), String> {
 }
 // Bounded WM_PRINT capture: an unresponsive application must not hang the switcher.
 // Applications that don't support printing keep their title/icon placeholder.
+pub fn thumbnails(windows: &[Destination]) -> HashMap<String, String> {
+    windows
+        .iter()
+        .filter_map(|w| thumbnail(w).map(|image| (w.id.clone(), image)))
+        .collect()
+}
 pub fn thumbnail(w: &Destination) -> Option<String> {
     unsafe {
         let hwnd = HWND(w.native_id as *mut c_void);
@@ -529,12 +535,15 @@ pub fn live_preview(
     key: &str,
     target: &Destination,
     bounds: Option<Bounds>,
+    hint: Option<Bounds>,
 ) -> bool {
     let mut previews = LIVE_PREVIEWS.lock().unwrap();
     let Some(b) = bounds else {
-        if let Some(handle) = previews.remove(key) {
-            unsafe {
-                let _ = DwmUnregisterThumbnail(handle);
+        for slot in 0..4 {
+            if let Some(handle) = previews.remove(&format!("{key}:{slot}")) {
+                unsafe {
+                    let _ = DwmUnregisterThumbnail(handle);
+                }
             }
         }
         return false;
@@ -543,40 +552,67 @@ pub fn live_preview(
         return false;
     };
     let source = HWND(target.native_id as *mut c_void);
-    let handle = if let Some(h) = previews.get(key) {
-        *h
-    } else {
-        let Ok(h) = (unsafe { DwmRegisterThumbnail(HWND(destination.0), source) }) else {
-            return false;
-        };
-        previews.insert(key.into(), h);
-        h
-    };
+    let mut updated = false;
     unsafe {
-        let Ok(size) = DwmQueryThumbnailSourceSize(handle) else {
-            return false;
-        };
-        let scale = (b.width / size.cx.max(1) as f64).min(b.height / size.cy.max(1) as f64);
-        let width = size.cx as f64 * scale;
-        let height = size.cy as f64 * scale;
-        let left = b.x + (b.width - width) / 2.;
-        let top = b.y + (b.height - height) / 2.;
-        let properties = DWM_THUMBNAIL_PROPERTIES {
-            dwFlags: DWM_TNP_RECTDESTINATION
-                | DWM_TNP_VISIBLE
-                | DWM_TNP_OPACITY
-                | DWM_TNP_SOURCECLIENTAREAONLY,
-            rcDestination: RECT {
-                left: left as i32,
-                top: top as i32,
-                right: (left + width) as i32,
-                bottom: (top + height) as i32,
-            },
-            opacity: 255,
-            fVisible: true.into(),
-            fSourceClientAreaOnly: false.into(),
-            ..Default::default()
-        };
-        DwmUpdateThumbnailProperties(handle, &properties).is_ok()
+        // DWM thumbnails composite above the WebView. Leave a center hole for
+        // the HTML hint instead of letting the native preview cover its badge.
+        for slot in 0..4 {
+            let slot_key = format!("{key}:{slot}");
+            let handle = if let Some(handle) = previews.get(&slot_key) {
+                *handle
+            } else {
+                let Ok(handle) = DwmRegisterThumbnail(HWND(destination.0), source) else {
+                    continue;
+                };
+                previews.insert(slot_key.clone(), handle);
+                handle
+            };
+            let Ok(size) = DwmQueryThumbnailSourceSize(handle) else {
+                continue;
+            };
+            let scale = (b.width / size.cx.max(1) as f64).min(b.height / size.cy.max(1) as f64);
+            if scale <= 0. {
+                continue;
+            }
+            let width = size.cx as f64 * scale;
+            let height = size.cy as f64 * scale;
+            let fitted = Bounds {
+                x: b.x + (b.width - width) / 2.,
+                y: b.y + (b.height - height) / 2.,
+                width,
+                height,
+            };
+            let pieces = crate::panel::around_hint(&fitted, hint.as_ref());
+            let Some(piece) = pieces.get(slot) else {
+                if let Some(handle) = previews.remove(&slot_key) {
+                    let _ = DwmUnregisterThumbnail(handle);
+                }
+                continue;
+            };
+            let properties = DWM_THUMBNAIL_PROPERTIES {
+                dwFlags: DWM_TNP_RECTDESTINATION
+                    | DWM_TNP_RECTSOURCE
+                    | DWM_TNP_VISIBLE
+                    | DWM_TNP_OPACITY
+                    | DWM_TNP_SOURCECLIENTAREAONLY,
+                rcDestination: RECT {
+                    left: piece.x.round() as i32,
+                    top: piece.y.round() as i32,
+                    right: (piece.x + piece.width).round() as i32,
+                    bottom: (piece.y + piece.height).round() as i32,
+                },
+                rcSource: RECT {
+                    left: ((piece.x - fitted.x) / scale).round() as i32,
+                    top: ((piece.y - fitted.y) / scale).round() as i32,
+                    right: ((piece.x + piece.width - fitted.x) / scale).round() as i32,
+                    bottom: ((piece.y + piece.height - fitted.y) / scale).round() as i32,
+                },
+                opacity: 255,
+                fVisible: true.into(),
+                fSourceClientAreaOnly: false.into(),
+            };
+            updated |= DwmUpdateThumbnailProperties(handle, &properties).is_ok();
+        }
     }
+    updated
 }

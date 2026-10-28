@@ -1,3 +1,4 @@
+#[cfg_attr(not(test), allow(dead_code))]
 mod codes;
 mod config;
 mod engine;
@@ -6,8 +7,12 @@ mod logger;
 #[cfg(target_os = "macos")]
 mod macos_access;
 mod model;
+mod navigation;
+mod panel;
 mod platform;
 mod runtime;
+mod search;
+mod stable_hints;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -58,15 +63,35 @@ pub fn run() {
             runtime::open_search,
             runtime::search,
             runtime::navigate,
+            runtime::navigate_direction,
+            runtime::set_navigation,
             runtime::activate,
             runtime::cancel,
-            runtime::get_thumbnail,
+            runtime::get_thumbnails,
+            runtime::get_cached_thumbnails,
             runtime::get_permissions,
             runtime::request_permission,
             runtime::get_diagnostics
         ])
         .setup(|app| {
             runtime::init(app.handle().clone())?;
+            if let Some(panel) = app.get_webview_window("switcher") {
+                use tauri::window::{Effect, EffectsBuilder};
+                #[cfg(target_os = "macos")]
+                let effects = EffectsBuilder::new()
+                    .effect(Effect::HudWindow)
+                    .state(tauri::window::EffectState::Active)
+                    .radius(17.)
+                    .build();
+                #[cfg(target_os = "windows")]
+                let effects = EffectsBuilder::new()
+                    .effect(Effect::Acrylic)
+                    .color(tauri::window::Color(22, 23, 33, 150))
+                    .build();
+                if let Err(error) = panel.set_effects(effects) {
+                    log::warn!("Panel backdrop unavailable: {error}");
+                }
+            }
             let [settings_label, restart_label, quit_label] =
                 tray_labels(&runtime::get_settings().language);
             let settings = MenuItem::with_id(app, "settings", settings_label, true, None::<&str>)?;
@@ -85,7 +110,11 @@ pub fn run() {
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "settings" => runtime::show_settings(app),
-                    "restart" => app.request_restart(),
+                    "restart" => {
+                        if let Err(error) = runtime::restart_application() {
+                            log::error!("{error}");
+                        }
+                    }
                     "quit" => app.exit(0),
                     _ => {}
                 })
