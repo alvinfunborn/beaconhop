@@ -474,6 +474,10 @@ test("hint character sets support punctuation, spaces and position editing witho
 });
 
 test("opacity applies to the invoked overview while settings and hints remain opaque", async ({page}) => {
+  // macOS CI enables Reduce Transparency. Exercise both accessibility modes
+  // explicitly rather than inheriting the runner's desktop preference.
+  const media=await page.context().newCDPSession(page);
+  await media.send("Emulation.setEmulatedMedia",{features:[{name:"prefers-reduced-transparency",value:"no-preference"}]});
   await page.goto("/?preview=1");
   await page.getByRole("button",{name:"Appearance",exact:true}).click();
   const background=await page.locator(".settings-shell").evaluate(el=>getComputedStyle(el).backgroundColor);
@@ -501,6 +505,13 @@ test("opacity applies to the invoked overview while settings and hints remain op
     await api.call("save_settings",{config:{...config,panelOpacity:100}});
   });
   await expect(async()=>expect(await alpha(".switcher")).toBe(255)).toPass();
+  await page.evaluate(async()=>{
+    const api=await import("/src/api.ts" as string);const config=await api.call("get_settings");
+    await api.call("save_settings",{config:{...config,panelOpacity:0}});
+  });
+  await expect(async()=>expect(await alpha(".switcher")).toBe(0)).toPass();
+  await media.send("Emulation.setEmulatedMedia",{features:[{name:"prefers-reduced-transparency",value:"reduce"}]});
+  await expect(async()=>expect(await alpha(".switcher")).toBe(255)).toPass();
 });
 
 test("custom hint capacity never hides overflow windows and spaces have a visible label",async({page})=>{
@@ -513,4 +524,29 @@ test("custom hint capacity never hides overflow windows and spaces have a visibl
   await expect(page.locator(".window-hint").first()).toHaveText("A␣");
   await expect(page.locator(".switcher-warning")).toContainText("Hint combinations are exhausted");
   await expect(page.locator(".window-hint")).toHaveCount(5);
+});
+
+test("reverse-cycle and Escape help follows a customized hold shortcut",async({page})=>{
+  await page.goto("/?preview=1");
+  await expect(page.getByText(/Shift \+ Tab.*cycles backward/)).toBeVisible();
+  await page.getByRole("button",{name:"Enter Hold shortcut manually",exact:true}).click();
+  await page.getByRole("textbox",{name:"Hold shortcut text",exact:true}).fill("Ctrl+Space");
+  await page.getByRole("button",{name:"Apply",exact:true}).click();
+  await expect(page.getByText(/Ctrl \+ Space cycles forward; Ctrl \+ Shift \+ Space cycles backward/)).toBeVisible();
+  await expect(page.getByText(/Esc cancels and returns to the original window/).first()).toBeVisible();
+  await page.getByRole("button",{name:"Save changes",exact:true}).click();
+  await page.route("**/src/api.ts",async route=>{
+    const response=await route.fetch();
+    await route.fulfill({response,body:(await response.text())+'\nconfig.holdShortcut="Ctrl+Space";'});
+  });
+  await page.setViewportSize({width:460,height:396});
+  await page.goto("/?preview=1&view=switcher");
+  await expect(page.locator('.switcher-footer [title="Ctrl + Shift + Space"]')).toContainText("Shift + Space previous");
+  await expect(page.locator(".switcher-footer")).toContainText("Esc cancel & return");
+  expect(await page.locator(".switcher-footer").evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+  await page.evaluate(async()=>(await import("/src/api.ts" as string)).call("open_search"));
+  await expect(page.locator(".switcher-footer")).toContainText("Esc cancel & return");
+  await page.getByRole("textbox",{name:"Search windows"}).press("Escape");
+  const session=await page.evaluate(async()=>(await import("/src/api.ts" as string)).call("get_session"));
+  expect(session.mode).toBe("inactive");
 });

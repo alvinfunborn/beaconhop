@@ -616,6 +616,41 @@ mod tests {
         assert!(matches!(&r.actions[0],Action::Activate(_, w) if w.id=="1"));
     }
     #[test]
+    fn reverse_cycle_and_escape_follow_every_configured_modifier_combination() {
+        use crate::config::{CTRL, SUPER};
+        for (shortcut, trigger, modifiers, released) in [
+            ("Alt+Tab", "Tab", ALT, "Alt"),
+            ("Ctrl+Space", "Space", CTRL, "Control"),
+            ("Super+Tab", "Tab", SUPER, "Super"),
+            ("Ctrl+Alt+Space", "Space", CTRL | ALT, "Control"),
+            ("Ctrl+Alt+Super+Tab", "Tab", CTRL | ALT | SUPER, "Super"),
+        ] {
+            let mut e = engine(4);
+            e.config.hold_shortcut = shortcut.into();
+            e.config.validate().unwrap();
+            assert!(e.handle(key(trigger, modifiers | SHIFT, true)).consumed);
+            assert_eq!(e.session.selected.as_deref(), Some("3"));
+            e.handle(key(trigger, modifiers | SHIFT, false));
+            e.handle(key(trigger, modifiers | SHIFT, true));
+            assert_eq!(e.session.selected.as_deref(), Some("2"));
+            e.handle(key(trigger, modifiers | SHIFT, false));
+            e.handle(key("Shift", modifiers, false));
+            assert_eq!(e.session.mode, Mode::Held);
+            e.handle(key(trigger, modifiers, true));
+            assert_eq!(e.session.selected.as_deref(), Some("3"));
+            let cancel = e.handle(key("Escape", modifiers, true));
+            assert!(matches!(&cancel.actions[0], Action::Cancel(_, Some(w)) if w.id == "0"));
+            assert!(e.handle(key(released, 0, false)).actions.is_empty());
+            e.handle(key(trigger, modifiers | SHIFT, true));
+            let commit = e.handle(key(released, 0, false));
+            assert!(matches!(&commit.actions[0], Action::Activate(_, w) if w.id == "3"));
+            e.open(Mode::Search, false);
+            let origin = e.session.origin.clone().unwrap();
+            let cancel = e.cancel();
+            assert!(matches!(&cancel[0], Action::Cancel(_, Some(w)) if w.id == origin.id));
+        }
+    }
+    #[test]
     fn rapid_roundtrip_uses_committed_target_until_native_focus_catches_up() {
         let mut e = engine(2);
         e.open(Mode::Held, false);

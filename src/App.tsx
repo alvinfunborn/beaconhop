@@ -19,6 +19,11 @@ function shortcut(s: string) {
     .replace("Control", isMac ? "⌃" : "Ctrl")
     .replaceAll("+", " + ");
 }
+function reverseShortcut(value: string) {
+  const parts = value.split("+");
+  parts.splice(parts.length - 1, 0, "Shift");
+  return parts.join("+");
+}
 function parseShortcutText(text: string, singleKey = false): string | null {
   const parts = text.trim().replace(/[⌘⌥⌃⇧]\s*\+?\s*/g, (s) => ({ "⌘": "Super+", "⌥": "Alt+", "⌃": "Ctrl+", "⇧": "Shift+" })[s[0]]!).split("+").map((s) => s.trim());
   const modifiers = new Set<string>();
@@ -329,14 +334,14 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                   t("Hold to switch", "按住切换"),
                   t(
                     "Hold the modifier, then type a hint to jump immediately.",
-                    "按住修饰键，输入屏幕字母后立即切换。",
+                    "按住修饰键，输入屏幕提示字符后立即切换。",
                   ),
                 )}
                 <Setting
                   title={t("Hold shortcut", "按住模式快捷键")}
                   description={t(
-                    "Tab cycles. Shift reverses. Release to open the selection.",
-                    "Tab 循环，Shift 反向，松开修饰键切换到选中窗口。",
+                    `${shortcut(draft.holdShortcut)} cycles forward; ${shortcut(reverseShortcut(draft.holdShortcut))} cycles backward. Keep the modifiers held, then release to switch. Esc cancels and returns to the original window.`,
+                    `${shortcut(draft.holdShortcut)} 正向循环；${shortcut(reverseShortcut(draft.holdShortcut))} 反向循环。保持修饰键按住，松开后切换到选中窗口。Esc 取消本次切换并返回原窗口。`,
                   )}
                 >
                   <Shortcut
@@ -350,8 +355,8 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                 <Setting
                   title={t("Search shortcut", "搜索模式快捷键")}
                   description={t(
-                    "Open search directly. Type a title or application name.",
-                    "直接打开搜索，可以松开快捷键，输入标题或应用名。",
+                    "Open search directly. Type a title or application name. Esc cancels and returns to the original window.",
+                    "直接打开搜索，可以松开快捷键，输入标题或应用名。Esc 取消本次切换并返回原窗口。",
                   )}
                 >
                   <Shortcut
@@ -1062,8 +1067,11 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
             </>
           ) : (
             <>
-              <span>
-                <kbd>Tab</kbd> {t("cycle", "循环")}
+              <span title={shortcut(config.holdShortcut)}>
+                <kbd>{shortcut(config.holdShortcut.split("+").at(-1)!)}</kbd> {t("next", "正向")}
+              </span>
+              <span title={shortcut(reverseShortcut(config.holdShortcut))}>
+                <kbd>Shift + {shortcut(config.holdShortcut.split("+").at(-1)!)}</kbd> {t("previous", "反向")}
               </span>
               <span>
                 <kbd>{shortcut(config.searchEntryKey)}</kbd> {t("search", "搜索")}
@@ -1071,7 +1079,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
             </>
           )}
           <span>
-            <kbd>Esc</kbd> {t("cancel", "取消")}
+            <kbd>Esc</kbd> {t("cancel & return", "取消并返回")}
           </span>
         </div>
       </footer>

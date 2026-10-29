@@ -724,8 +724,11 @@ textarea {
 }
 .switcher-footer > div {
   display: flex;
-  gap: 17px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px 14px;
 }
+.switcher-footer > div > span { white-space: nowrap; }
 .switcher-footer kbd {
   font-size: 10px;
   padding: 2px 4px;

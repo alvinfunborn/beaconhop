@@ -13,7 +13,7 @@ BeaconHop is a window navigator for macOS and Windows, adapted from [Screen Buoy
 - Search accepts Chinese text, full pinyin, initials, common polyphonic readings and mixed Chinese/Latin terms; Latin accents and full-width letters are normalized. For example, `weixin` / `wx` match 微信, and `chongqing` matches 重庆. Chinese IME composition confirms text before Enter can switch windows.
 - All four arrow keys navigate by the visible card positions in both hold and search modes. Tab / Shift + Tab retain recent-window order. Escape cancels. Click a card to switch. Minimized windows are restored.
 
-Both global shortcuts and the hold-to-search key are configurable. Desktop and display scopes are independent. Cross-desktop navigation follows a window to its existing desktop; it never moves the window.
+Both global shortcuts and the hold-to-search key are configurable. Adding Shift to the configured hold shortcut reverses cycling, including custom Control, Command/Windows and multiple-modifier combinations (for example, Ctrl + Space / Ctrl + Shift + Space). Releasing Shift alone keeps the overview open; releasing a configured hold modifier commits the selection. Esc cancels and returns to the original window in both hold and search modes. The settings description and overview footer follow the configured keys. Desktop and display scopes are independent. Cross-desktop navigation follows a window to its existing desktop; it never moves the window.
 
 ## Status and systems
 
