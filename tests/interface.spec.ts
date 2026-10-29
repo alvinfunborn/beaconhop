@@ -450,3 +450,67 @@ call=async function(name,args={}) {
   await check.click();await expect(page.getByText("You’re up to date.",{exact:true})).toBeVisible();
   await expect(page.getByText("Update failed. You can try again.",{exact:true})).toHaveCount(0);
 });
+
+test("hint character sets support punctuation, spaces and position editing without a misleading alphabet preview", async ({page}) => {
+  await page.goto("/?preview=1");
+  await page.getByRole("button", {name:"Shortcuts",exact:true}).click();
+  await page.getByLabel("Hint characters", {exact:true}).fill("as12;? ");
+  await expect(page.getByLabel("Hint characters", {exact:true})).toHaveValue("AS12;? ");
+  await expect(page.locator(".hint-preview")).toHaveCount(0);
+  await page.getByLabel("Hint length", {exact:true}).selectOption("custom");
+  await page.getByLabel("Position 1", {exact:true}).fill("as12");
+  await page.getByLabel("Position 2", {exact:true}).fill("j; ");
+  await page.getByLabel("Extra prefixes", {exact:true}).fill("q\\");
+  await expect(page.getByText("36 hint combinations.", {exact:false})).toBeVisible();
+  await page.getByRole("button",{name:"Add position",exact:true}).click();
+  await page.getByLabel("Position 3", {exact:true}).fill("/?");
+  await page.getByRole("button",{name:"Remove position 3",exact:true}).click();
+  await page.getByRole("button",{name:"Save changes",exact:true}).click();
+  const config=await page.evaluate(async()=>(await import("/src/api.ts" as string)).call("get_settings"));
+  expect(config.hintAlphabet).toBe("AS12;? ");
+  expect(config.hintCharsets).toEqual(["AS12","J; "]);
+  expect(config.hintExtra).toBe("Q\\");
+  await page.screenshot({path:"logs/characters-settings.png"});
+});
+
+test("opacity applies to the invoked overview while settings and hints remain opaque", async ({page}) => {
+  await page.goto("/?preview=1");
+  await page.getByRole("button",{name:"Appearance",exact:true}).click();
+  const background=await page.locator(".settings-shell").evaluate(el=>getComputedStyle(el).backgroundColor);
+  await page.getByLabel("Switcher background opacity",{exact:true}).fill("0");
+  await expect(page.locator(".settings-shell")).toHaveCSS("background-color",background);
+  await page.getByRole("button",{name:"Save changes",exact:true}).click();
+  const config=await page.evaluate(async()=>(await import("/src/api.ts" as string)).call("get_settings"));
+  expect(config.panelOpacity).toBe(0);
+  await page.route("**/src/api.ts",async route=>{
+    const response=await route.fetch();
+    await route.fulfill({response,body:(await response.text())+"\nconfig.panelOpacity=0;"});
+  });
+  await page.goto("/?preview=1&view=switcher");
+  const alpha=async(selector:string)=>page.locator(selector).first().evaluate(el=>{
+    const context=document.createElement("canvas").getContext("2d")!;
+    context.fillStyle=getComputedStyle(el).backgroundColor;context.fillRect(0,0,1,1);
+    return context.getImageData(0,0,1,1).data[3];
+  });
+  expect(await alpha(".switcher")).toBe(0);
+  expect(await alpha(".window-card")).toBe(0);
+  expect(await alpha(".preview-frame")).toBe(0);
+  expect(await alpha(".window-hint")).toBe(255);
+  await page.evaluate(async()=>{
+    const api=await import("/src/api.ts" as string);const config=await api.call("get_settings");
+    await api.call("save_settings",{config:{...config,panelOpacity:100}});
+  });
+  await expect(async()=>expect(await alpha(".switcher")).toBe(255)).toPass();
+});
+
+test("custom hint capacity never hides overflow windows and spaces have a visible label",async({page})=>{
+  await page.route("**/src/api.ts",async route=>{
+    const response=await route.fetch();
+    await route.fulfill({response,body:(await response.text())+'\nsession.windows[0].hint="A ";session.windows[1].hint="";'});
+  });
+  await page.goto("/?preview=1&view=switcher");
+  await expect(page.getByRole("option")).toHaveCount(6);
+  await expect(page.locator(".window-hint").first()).toHaveText("A␣");
+  await expect(page.locator(".switcher-warning")).toContainText("Hint combinations are exhausted");
+  await expect(page.locator(".window-hint")).toHaveCount(5);
+});

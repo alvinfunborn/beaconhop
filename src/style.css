@@ -365,16 +365,6 @@ select {
   font-size: 14px;
   padding: 3px 9px;
 }
-.hint-preview {
-  display: flex;
-  gap: 7px;
-  padding-top: 16px;
-}
-.hint-preview kbd {
-  color: var(--accent);
-  padding: 5px 9px;
-  font-size: 12px;
-}
 .intro {
   color: var(--muted);
   font-size: 13px;
@@ -958,8 +948,8 @@ textarea {
 
 /* Native vibrancy/Acrylic supplies the desktop blur; tint only the panel surface. */
 .switcher { background: linear-gradient(145deg, #ffffff0b, transparent 48%), color-mix(in srgb, var(--bg) var(--surface-opacity, 24%), transparent); border-color: color-mix(in srgb, var(--text) 17%, transparent); backdrop-filter: blur(28px) saturate(125%); -webkit-backdrop-filter: blur(28px) saturate(125%); }
-.switcher .window-card { background: color-mix(in srgb, var(--card) 38%, transparent); }
-.switcher .preview-frame { background: color-mix(in srgb, var(--panel) 28%, transparent); }
+.switcher .window-card { background: color-mix(in srgb, var(--card) var(--surface-opacity, 24%), transparent); }
+.switcher .preview-frame { background: color-mix(in srgb, var(--panel) var(--surface-opacity, 24%), transparent); }
 @media (prefers-reduced-transparency: reduce) { .switcher { background: var(--bg); } }
 
 .app-updates { display: grid; gap: 14px; }
@@ -968,10 +958,6 @@ textarea {
 .app-updates progress { width: 100%; accent-color: var(--accent); }
 .app-updates [role="status"] { display: grid; gap: 12px; }
 
-/* Keep native behind-window blur visible in both settings and the switcher. */
-.settings-shell { background: color-mix(in srgb, var(--bg) var(--surface-opacity, 24%), transparent); }
-.settings-shell aside { background: color-mix(in srgb, var(--panel) 28%, transparent); }
-.settings-footer { background: color-mix(in srgb, var(--panel) 32%, transparent); }
 .hint-badge, .window-card .hint-badge {
   display: inline-block; padding: .2em .48em; min-width: 1.45em; line-height: 1.15;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -991,3 +977,9 @@ textarea {
 @media (prefers-reduced-transparency: reduce) {
  .settings-shell, .settings-shell aside, .settings-footer, .switcher { background: var(--bg); }
 }
+
+.hint-characters > .muted { line-height: 1.7; margin: 14px 0; }
+.charset-mode, .charset-row { display: flex; align-items: center; gap: 12px; margin: 18px 0; flex-wrap: wrap; }
+.charset-row .alphabet { flex: 1; min-width: 160px; font-family: ui-monospace, monospace; }
+.charset-row small { flex-basis: 100%; line-height: 1.7; }
+.charset-row button { padding: 6px 12px; }

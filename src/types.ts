@@ -12,6 +12,8 @@ export type Config = {
   includeMinimized: boolean;
   includeHidden: boolean;
   hintAlphabet: string;
+  hintCharsets: string[];
+  hintExtra: string;
   thumbnails: boolean;
   panelOpacity: number;
   hintStyle: HintStyle;

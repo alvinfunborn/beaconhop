@@ -4,6 +4,7 @@ import { call, subscribe, defaults, native, preview } from "./api";
 import { tileWindows, type Tile } from "./layout";
 import { usePreviews } from "./previews";
 import { Updates } from "./Updates";
+import { HintCharacters } from "./HintCharacters";
 import { HintAppearance } from "./HintAppearance";
 import { hintVariables } from "./hints";
 const isMac = navigator.platform.toLowerCase().includes("mac");
@@ -242,7 +243,7 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
     ["about", "◎", t("About", "关于")],
   ];
   return (
-    <div className="settings-shell" style={{"--surface-opacity": `${draft.panelOpacity}%`} as CSSProperties}>
+    <div className="settings-shell">
       <aside>
         <a className="brand">
           <img src="/beaconhop.svg" />
@@ -378,38 +379,7 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                   />
                 </Setting>
               </section>
-              <section>
-                <h2>{t("Your hint alphabet", "顺手的提示字母")}</h2>
-                <Setting
-                  title={t("Letters in priority order", "字母优先顺序")}
-                  description={t(
-                    "4–26 unique A–Z letters. Hints stay fixed until you close the switcher.",
-                    "4–26 个不重复的 A–Z 字母。一次唤起期间，提示保持不变。",
-                  )}
-                >
-                  <input
-                    className="alphabet"
-                    aria-label={t("Hint letters", "提示字母")}
-                    value={draft.hintAlphabet}
-                    onChange={(e) =>
-                      change(
-                        "hintAlphabet",
-                        e.target.value.toUpperCase().replace(/[^A-Z]/g, ""),
-                      )
-                    }
-                    spellCheck={false}
-                    maxLength={26}
-                  />
-                </Setting>
-                <div className="hint-preview">
-                  {draft.hintAlphabet
-                    .slice(0, 12)
-                    .split("")
-                    .map((c, i) => (
-                      <kbd key={i}>{c}</kbd>
-                    ))}
-                </div>
-              </section>
+              <HintCharacters value={draft} onChange={patch => { setDraft(old => ({...old, ...patch})); setNotice(""); setError(""); }} t={t} />
             </>
           )}
           {tab === "scope" && (
@@ -529,8 +499,8 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                 ])}
               </section>
               <section>
-                <Setting title={t("Panel opacity", "面板不透明度")} description={t("Lower values reveal more of the native desktop blur. Reduce Transparency in system settings can override this.", "降低数值可透出更多桌面毛玻璃。系统的“减少透明度”设置可能覆盖此效果。") }>
-                  <input aria-label={t("Panel opacity", "面板不透明度")} type="range" min={0} max={100} value={draft.panelOpacity} onChange={e => change("panelOpacity",Number(e.target.value))} /><output>{draft.panelOpacity}%</output>
+                <Setting title={t("Switcher background opacity", "切换面板背景不透明度")} description={t("Applies to the window overview opened by a shortcut. Lower values reveal more of the frosted desktop; thumbnails and hints stay clear. Save, then open the switcher to try it.", "控制快捷键唤起后的整个窗口总览背景。数值越低，毛玻璃透出越多；缩略图与 Hint 保持清晰。保存后唤起即可查看。") }>
+                  <input aria-label={t("Switcher background opacity", "切换面板背景不透明度")} type="range" min={0} max={100} value={draft.panelOpacity} onChange={e => change("panelOpacity",Number(e.target.value))} /><output>{draft.panelOpacity}%</output>
                 </Setting>
               </section>
               <HintAppearance value={draft.hintStyle} defaults={defaults.hintStyle} onChange={value => change("hintStyle",value)} t={t} />
@@ -995,7 +965,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
             <>
               <h1>{t("Your next hop", "下一跳")}</h1>
               <p>
-                {t("Type a hint to go there", "按下提示字母，直接抵达")}
+                {t("Type a hint to go there", "按下提示字符，直接抵达")}
                 {session?.prefix && (
                   <>
                     {" "}
@@ -1022,6 +992,9 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
           {error || session?.error}
         </div>
       )}
+      {!isSearch && visible.some(w => !w.hint) && <div className="switcher-warning">
+        {t("Hint combinations are exhausted. Use arrows, search or click for windows without a hint, or add characters in Settings.", "Hint 组合已用完。无 Hint 的窗口可用方向键、搜索或点击选择，也可在设置中增加字符。")}
+      </div>}
       {session?.warnings.map((w) => (
         <div className="switcher-warning" key={w}>
           {w}
@@ -1210,7 +1183,7 @@ function WindowCard({
             <small>{w.appName}</small>
           </div>
         )}
-        {!search && <kbd className="window-hint hint-badge" style={hintVariables(hintStyle)}>{w.hint}</kbd>}
+        {!search && w.hint && <kbd className="window-hint hint-badge" style={hintVariables(hintStyle)}>{w.hint.replaceAll(" ", "␣")}</kbd>}
         {w.minimized && (
           <span className="window-state">{zh ? "最小化" : "Minimized"}</span>
         )}

@@ -1,4 +1,3 @@
-#[cfg_attr(not(test), allow(dead_code))]
 mod codes;
 mod config;
 mod engine;
@@ -79,7 +78,7 @@ pub fn run() {
         ])
         .setup(|app| {
             runtime::init(app.handle().clone())?;
-            for label in ["main", "switcher"] {
+            for label in ["switcher"] {
                 if let Some(panel) = app.get_webview_window(label) {
                     use tauri::window::{Effect, EffectsBuilder};
                     #[cfg(target_os = "macos")]

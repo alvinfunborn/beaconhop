@@ -101,7 +101,7 @@ impl Engine {
             }
         }
         self.hints.sync(
-            &self.config.hint_alphabet,
+            &self.config,
             &snapshot
                 .windows
                 .iter()
@@ -146,7 +146,7 @@ impl Engine {
         let ranks: HashMap<_, _> = self.mru.iter().enumerate().map(|(i, id)| (id, i)).collect();
         windows.sort_by_key(|w| ranks.get(&w.id).copied().unwrap_or(usize::MAX));
         self.hints.sync(
-            &self.config.hint_alphabet,
+            &self.config,
             &self
                 .snapshot
                 .windows
@@ -406,11 +406,12 @@ impl Engine {
                     self.session.revision += 1;
                     response.actions.push(Action::Publish);
                 }
-                key if key.len() == 1
-                    && self.config.hint_alphabet.contains(key)
+                key if crate::config::hint_character(key, event.modifiers)
+                    .is_some_and(|c| self.config.hint_contains(c))
                     && !event.repeat =>
                 {
-                    let candidate = format!("{}{}", self.session.prefix, key);
+                    let character = crate::config::hint_character(key, event.modifiers).unwrap();
+                    let candidate = format!("{}{}", self.session.prefix, character);
                     if self
                         .session
                         .windows
@@ -524,6 +525,53 @@ mod tests {
         assert!(matches!(&r.actions[0],Action::Activate(_, w) if w.id=="3"));
         assert_eq!(e.session.mode, Mode::Inactive);
         assert!(e.handle(key(&h, ALT, false)).consumed);
+    }
+    #[test]
+    fn punctuation_shifted_symbols_and_spaces_activate_exact_custom_hints() {
+        for (character, name, modifiers) in [
+            (';', ";", ALT),
+            ('\\', "Backslash", ALT),
+            (' ', "Space", ALT),
+            ('?', "/", ALT | SHIFT),
+            ('!', "1", ALT | SHIFT),
+            ('|', "Backslash", ALT | SHIFT),
+            ('"', "'", ALT | SHIFT),
+            ('+', "=", ALT | SHIFT),
+            ('~', "Backquote", ALT | SHIFT),
+        ] {
+            let mut e = engine(3);
+            e.config.search_entry_key = "9".into();
+            e.config.hint_charsets = vec!["AS".into(), character.to_string()];
+            e.config.validate().unwrap();
+            e.open(Mode::Held, false);
+            assert_eq!(
+                e.session
+                    .windows
+                    .iter()
+                    .filter(|w| !w.hint.is_empty())
+                    .count(),
+                2
+            );
+            assert_eq!(e.session.windows.len(), 3); // Capacity must never hide a window.
+            let target = e
+                .session
+                .windows
+                .iter()
+                .find(|w| w.hint.starts_with('A'))
+                .unwrap()
+                .window
+                .id
+                .clone();
+            let first = e.handle(key("A", ALT, true));
+            assert!(first.consumed);
+            assert_eq!(e.session.mode, Mode::Held);
+            let result = e.handle(key(name, modifiers, true));
+            assert!(
+                matches!(&result.actions[0], Action::Activate(_, w) if w.id == target),
+                "{character}"
+            );
+            assert!(e.handle(key(name, modifiers, false)).consumed);
+        }
     }
     #[test]
     fn backquote_search_survives_modifier_release() {

@@ -18,6 +18,8 @@ pub struct Config {
     pub include_minimized: bool,
     pub include_hidden: bool,
     pub hint_alphabet: String,
+    pub hint_charsets: Vec<String>,
+    pub hint_extra: String,
     pub thumbnails: bool,
     pub panel_opacity: u8,
     pub hint_style: HintStyle,
@@ -97,6 +99,8 @@ impl Default for Config {
             include_minimized: true,
             include_hidden: true,
             hint_alphabet: "ASDFGHJKLQWERTYUIOPZXCVBNM".into(),
+            hint_charsets: vec![],
+            hint_extra: String::new(),
             thumbnails: true,
             panel_opacity: 24,
             hint_style: HintStyle::default(),
@@ -182,6 +186,48 @@ impl Shortcut {
 }
 
 impl Config {
+    pub fn hint_contains(&self, character: char) -> bool {
+        if self.hint_charsets.is_empty() {
+            self.hint_alphabet.contains(character)
+        } else {
+            self.hint_extra.contains(character)
+                || self.hint_charsets.iter().any(|row| row.contains(character))
+        }
+    }
+
+    pub(crate) fn validate_hint_charsets(&self) -> Result<(), String> {
+        if self.hint_charsets.is_empty() {
+            validate_charset(&self.hint_alphabet, 2)?;
+        } else {
+            if self.hint_charsets.len() > 8 {
+                return Err("提示最多 8 位 / Use at most 8 hint positions".into());
+            }
+            for row in &self.hint_charsets {
+                validate_charset(row, 1)?;
+            }
+            validate_charset(&self.hint_extra, 0)?;
+            if self
+                .hint_extra
+                .chars()
+                .any(|c| self.hint_charsets[0].contains(c))
+            {
+                return Err("额外前缀不能与第一位字符重复 / Extra prefixes must differ from the first position".into());
+            }
+            let capacity = self
+                .hint_charsets
+                .iter()
+                .try_fold(1usize, |n, row| n.checked_mul(row.len()))
+                .and_then(|n| n.checked_mul(1 + self.hint_extra.len()));
+            if capacity.is_none_or(|n| n > 8192) {
+                return Err(
+                    "字符组合超过 8192 个，请减少字符或位数 / Limit hint combinations to 8192"
+                        .into(),
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         self.hint_style.validate()?;
         if self.panel_opacity > 100 {
@@ -196,18 +242,19 @@ impl Config {
             return Err("Keep Shift free for reverse cycling in the hold shortcut".into());
         }
         let entry = parse_search_entry_key(&self.search_entry_key)?;
-        if entry == hold.key || (entry.len() == 1 && self.hint_alphabet.contains(&entry)) {
+        if entry == hold.key
+            || [0, SHIFT]
+                .iter()
+                .any(|shift| hint_character(&entry, *shift).is_some_and(|c| self.hint_contains(c)))
+            || [0, SHIFT].iter().any(|shift| {
+                hint_character(&hold.key, *shift).is_some_and(|c| self.hint_contains(c))
+            })
+        {
             return Err(
-                "The search entry key must not conflict with hold cycling or hint letters".into(),
+                "搜索键、循环键与提示字符不能冲突 / Search, cycling and hint keys must not conflict".into(),
             );
         }
-        let letters: HashSet<_> = self.hint_alphabet.chars().collect();
-        if !(4..=26).contains(&self.hint_alphabet.len())
-            || letters.len() != self.hint_alphabet.len()
-            || !self.hint_alphabet.bytes().all(|c| c.is_ascii_uppercase())
-        {
-            return Err("Hint letters must contain 4–26 distinct uppercase A–Z letters".into());
-        }
+        self.validate_hint_charsets()?;
         if !["grid", "list"].contains(&self.layout.as_str()) {
             return Err("Unknown layout".into());
         }
@@ -222,6 +269,37 @@ impl Config {
         }
         Ok(())
     }
+}
+
+pub(crate) fn validate_charset(value: &str, min: usize) -> Result<(), String> {
+    let unique: HashSet<_> = value.chars().collect();
+    if value.len() < min
+        || unique.len() != value.len()
+        || !value
+            .bytes()
+            .all(|c| (c.is_ascii_graphic() || c == b' ') && !c.is_ascii_lowercase())
+    {
+        return Err(format!("至少 {min} 个不重复字符：英文字母、数字、标点或空格 / Use {min}+ unique uppercase letters, digits, punctuation or spaces"));
+    }
+    Ok(())
+}
+
+// Use the same physical key names on both platforms, independently of the IME.
+// Shift changes digits/punctuation; letters are always displayed in uppercase.
+pub(crate) fn hint_character(key: &str, modifiers: u8) -> Option<char> {
+    let character = match key {
+        "Backquote" => '`',
+        "Backslash" => '\\',
+        "Space" => ' ',
+        key if key.len() == 1 => key.chars().next()?,
+        _ => return None,
+    };
+    if modifiers & SHIFT != 0 {
+        if let Some(index) = "`1234567890-=[]\\;',./".find(character) {
+            return "~!@#$%^&*()_+{}|:\"<>?".chars().nth(index);
+        }
+    }
+    Some(character)
 }
 
 pub fn load(path: &Path) -> Result<Config, String> {
@@ -251,10 +329,41 @@ pub fn save(path: &Path, config: &Config) -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
+    fn flexible_charsets_reject_unreachable_or_ambiguous_keys() {
+        let mut config = Config::default();
+        config.hint_alphabet = "AS12;? ".into();
+        config.validate().unwrap();
+        config.hint_charsets = vec!["A1; ".into(), "J/?".into()];
+        config.hint_extra = "Q\\".into();
+        config.validate().unwrap();
+        config.hint_extra = "A".into();
+        assert!(config.validate().unwrap_err().contains("first position"));
+        config.hint_extra = "~".into();
+        assert!(config.validate().unwrap_err().contains("conflict"));
+        config.search_entry_key = "2".into();
+        config.validate().unwrap();
+        config.hint_extra = "@".into(); // Shift+2 would otherwise enter search.
+        assert!(config.validate().is_err());
+        config.hint_extra.clear();
+        for invalid in ["AA", "", "é", "\n", "a"] {
+            config.hint_charsets[1] = invalid.into();
+            assert!(config.validate().is_err());
+        }
+        config.hint_charsets = vec!["ASDFGHJKL".into(); 8];
+        assert!(config.validate().unwrap_err().contains("8192"));
+    }
+
+    #[test]
     fn old_settings_get_new_defaults_and_customizations_round_trip() {
         let mut old = serde_json::to_value(Config::default()).unwrap();
         let fields = old.as_object_mut().unwrap();
-        for key in ["searchEntryKey", "hintStyle", "panelOpacity"] {
+        for key in [
+            "searchEntryKey",
+            "hintStyle",
+            "panelOpacity",
+            "hintCharsets",
+            "hintExtra",
+        ] {
             fields.remove(key);
         }
         fields.insert("searchShortcut".into(), "Super+Backslash".into());
@@ -262,6 +371,8 @@ mod tests {
         assert_eq!(restored.search_entry_key, "Backquote");
         assert_eq!(restored.search_shortcut, "Super+Backslash");
         assert_eq!(restored.hint_style, HintStyle::default());
+        assert!(restored.hint_charsets.is_empty());
+        assert!(restored.hint_extra.is_empty());
         restored.search_entry_key = "Backslash".into();
         restored.hint_style.opacity = 65;
         restored.hint_style.font_size = 36;
