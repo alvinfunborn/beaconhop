@@ -1,4 +1,3 @@
-mod codes;
 mod config;
 mod engine;
 mod input;

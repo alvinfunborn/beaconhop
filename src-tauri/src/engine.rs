@@ -488,7 +488,10 @@ mod tests {
         );
     }
     fn engine(count: usize) -> Engine {
-        let mut e = Engine::new(Config::default());
+        let mut e = Engine::new(Config {
+            hold_shortcut: "Alt+Tab".into(),
+            ..Config::default()
+        });
         e.update(Snapshot {
             focused_id: Some("0".into()),
             current_display: "a".into(),
@@ -527,7 +530,7 @@ mod tests {
         assert!(e.handle(key(&h, ALT, false)).consumed);
     }
     #[test]
-    fn punctuation_shifted_symbols_and_spaces_activate_exact_custom_hints() {
+    fn punctuation_shifted_symbols_and_spaces_activate_short_hints() {
         for (character, name, modifiers) in [
             (';', ";", ALT),
             ('\\', "Backslash", ALT),
@@ -539,9 +542,9 @@ mod tests {
             ('+', "=", ALT | SHIFT),
             ('~', "Backquote", ALT | SHIFT),
         ] {
-            let mut e = engine(3);
+            let mut e = engine(10);
             e.config.search_entry_key = "9".into();
-            e.config.hint_charsets = vec!["AS".into(), character.to_string()];
+            e.config.hint_alphabet = format!("AS{character}");
             e.config.validate().unwrap();
             e.open(Mode::Held, false);
             assert_eq!(
@@ -550,14 +553,14 @@ mod tests {
                     .iter()
                     .filter(|w| !w.hint.is_empty())
                     .count(),
-                2
+                9
             );
-            assert_eq!(e.session.windows.len(), 3); // Capacity must never hide a window.
+            assert_eq!(e.session.windows.len(), 10); // Capacity must never hide a window.
             let target = e
                 .session
                 .windows
                 .iter()
-                .find(|w| w.hint.starts_with('A'))
+                .find(|w| w.hint == format!("A{character}"))
                 .unwrap()
                 .window
                 .id
@@ -765,6 +768,46 @@ mod tests {
         }
     }
     #[test]
+    fn expanding_to_two_keys_cannot_change_an_open_overview() {
+        let mut e = engine(26);
+        e.open(Mode::Held, false);
+        let target = e
+            .session
+            .windows
+            .iter()
+            .find(|w| w.hint == "M")
+            .unwrap()
+            .window
+            .id
+            .clone();
+        let before: Vec<_> = e
+            .session
+            .windows
+            .iter()
+            .map(|w| (w.window.id.clone(), w.hint.clone()))
+            .collect();
+        e.update(engine(27).snapshot);
+        assert_ne!(e.hints.get(&target), "M");
+        assert_eq!(
+            before,
+            e.session
+                .windows
+                .iter()
+                .map(|w| (w.window.id.clone(), w.hint.clone()))
+                .collect::<Vec<_>>()
+        );
+        let result = e.handle(key("M", ALT, true));
+        assert!(matches!(&result.actions[0], Action::Activate(_, w) if w.id == target));
+        e.open(Mode::Held, false);
+        assert_eq!(e.session.windows.len(), 27);
+        assert!(e
+            .session
+            .windows
+            .iter()
+            .all(|w| (1..=2).contains(&w.hint.len())));
+    }
+
+    #[test]
     fn hints_are_stable_and_closed_targets_cannot_be_reused() {
         let mut e = engine(30);
         e.open(Mode::Held, false);
@@ -863,7 +906,10 @@ mod edge_tests {
     use crate::config::ALT;
     #[test]
     fn empty_inventory_release_exits_hold_mode() {
-        let mut e = Engine::new(Config::default());
+        let mut e = Engine::new(Config {
+            hold_shortcut: "Alt+Tab".into(),
+            ..Config::default()
+        });
         e.open(Mode::Held, false);
         let r = e.handle(KeyEvent {
             key: "Alt".into(),
@@ -877,7 +923,10 @@ mod edge_tests {
     }
     #[test]
     fn failed_release_enters_recoverable_search() {
-        let mut e = Engine::new(Config::default());
+        let mut e = Engine::new(Config {
+            hold_shortcut: "Alt+Tab".into(),
+            ..Config::default()
+        });
         let w = Destination {
             id: "a".into(),
             pid: 1,
@@ -898,7 +947,10 @@ mod edge_tests {
     }
     #[test]
     fn repeat_cannot_submit_a_two_letter_hint() {
-        let mut e = Engine::new(Config::default());
+        let mut e = Engine::new(Config {
+            hold_shortcut: "Alt+Tab".into(),
+            ..Config::default()
+        });
         e.snapshot.windows = (0..30)
             .map(|i| Destination {
                 id: i.to_string(),

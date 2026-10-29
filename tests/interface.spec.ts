@@ -451,26 +451,23 @@ call=async function(name,args={}) {
   await expect(page.getByText("Update failed. You can try again.",{exact:true})).toHaveCount(0);
 });
 
-test("hint character sets support punctuation, spaces and position editing without a misleading alphabet preview", async ({page}) => {
+test("one character set supports punctuation and spaces with no length or position settings", async ({page}) => {
   await page.goto("/?preview=1");
   await page.getByRole("button", {name:"Shortcuts",exact:true}).click();
   await page.getByLabel("Hint characters", {exact:true}).fill("as12;? ");
   await expect(page.getByLabel("Hint characters", {exact:true})).toHaveValue("AS12;? ");
+  await expect(page.getByText("Single-character hints first; automatically use two characters when needed. Never more than two.", {exact:true})).toBeVisible();
   await expect(page.locator(".hint-preview")).toHaveCount(0);
-  await page.getByLabel("Hint length", {exact:true}).selectOption("custom");
-  await page.getByLabel("Position 1", {exact:true}).fill("as12");
-  await page.getByLabel("Position 2", {exact:true}).fill("j; ");
-  await page.getByLabel("Extra prefixes", {exact:true}).fill("q\\");
-  await expect(page.getByText("36 hint combinations.", {exact:false})).toBeVisible();
-  await page.getByRole("button",{name:"Add position",exact:true}).click();
-  await page.getByLabel("Position 3", {exact:true}).fill("/?");
-  await page.getByRole("button",{name:"Remove position 3",exact:true}).click();
+  await expect(page.getByLabel("Hint length", {exact:true})).toHaveCount(0);
+  await expect(page.getByLabel(/Position \d/)).toHaveCount(0);
+  await expect(page.getByLabel("Extra prefixes", {exact:true})).toHaveCount(0);
+  await expect(page.getByRole("button",{name:"Add position",exact:true})).toHaveCount(0);
   await page.getByRole("button",{name:"Save changes",exact:true}).click();
   const config=await page.evaluate(async()=>(await import("/src/api.ts" as string)).call("get_settings"));
   expect(config.hintAlphabet).toBe("AS12;? ");
-  expect(config.hintCharsets).toEqual(["AS12","J; "]);
-  expect(config.hintExtra).toBe("Q\\");
-  await page.screenshot({path:"logs/characters-settings.png"});
+  expect(config).not.toHaveProperty("hintCharsets");
+  expect(config).not.toHaveProperty("hintExtra");
+  await page.screenshot({path:"logs/short-hint-settings.png"});
 });
 
 test("opacity applies to the invoked overview while settings and hints remain opaque", async ({page}) => {
@@ -514,7 +511,7 @@ test("opacity applies to the invoked overview while settings and hints remain op
   await expect(async()=>expect(await alpha(".switcher")).toBe(255)).toPass();
 });
 
-test("custom hint capacity never hides overflow windows and spaces have a visible label",async({page})=>{
+test("two-character hint capacity never hides overflow windows and spaces have a visible label",async({page})=>{
   await page.route("**/src/api.ts",async route=>{
     const response=await route.fetch();
     await route.fulfill({response,body:(await response.text())+'\nsession.windows[0].hint="A ";session.windows[1].hint="";'});

@@ -7,7 +7,7 @@ export const preview =
   import.meta.env.DEV &&
   new URLSearchParams(location.search).has("preview");
 export const defaults: Config = {
-  holdShortcut: "Alt+Tab",
+  holdShortcut: navigator.platform.toLowerCase().includes("win") ? "Super+Tab" : "Alt+Tab",
   searchShortcut: "Super+Backquote",
   searchEntryKey: "Backquote",
   holdEnabled: true,
@@ -16,8 +16,6 @@ export const defaults: Config = {
   includeMinimized: true,
   includeHidden: true,
   hintAlphabet: "ASDFGHJKLQWERTYUIOPZXCVBNM",
-  hintCharsets: [],
-  hintExtra: "",
   thumbnails: true,
   panelOpacity: 24,
   hintStyle: { fontSize: 28, fontWeight: 700, color: "#19130a", background: "#ffcf48", opacity: 100, radius: 8, borderColor: "#30220c", borderWidth: 2, shadow: true },

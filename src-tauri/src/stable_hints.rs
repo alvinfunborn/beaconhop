@@ -1,74 +1,44 @@
 use crate::config::Config;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
-// Reserve two branches at each depth. Existing short codes never become prefixes
-// when new windows arrive (e.g. A stays A; expansion happens under N and M).
+// Use single keys first. Only when they run out, replace the least-preferred
+// single with its two-key combinations. Expand from the end so earlier keys
+// stay short; keep existing two-key branches first so they retain their codes.
 fn pool(alphabet: &str, count: usize) -> Vec<String> {
     let chars: Vec<_> = alphabet.chars().collect();
     if chars.len() < 2 {
         return vec![];
     }
-    let split = chars.len() - if chars.len() >= 4 { 2 } else { 1 };
-    let mut branches = VecDeque::from([String::new()]);
-    let mut result = Vec::new();
-    while result.len() < count {
-        let prefix = branches.pop_front().unwrap();
-        for c in &chars[..split] {
-            result.push(format!("{prefix}{c}"));
-            if result.len() == count {
-                return result;
-            }
-        }
-        for c in &chars[split..] {
-            branches.push_back(format!("{prefix}{c}"));
+    let count = count.min(chars.len() * chars.len());
+    let expanded = count.saturating_sub(chars.len()).div_ceil(chars.len() - 1);
+    let split = chars.len() - expanded;
+    let mut result: Vec<_> = chars[..split].iter().map(char::to_string).collect();
+    for prefix in chars[split..].iter().rev() {
+        for suffix in &chars {
+            result.push(format!("{prefix}{suffix}"));
         }
     }
+    result.truncate(count);
     result
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct StableHints {
     alphabet: String,
-    #[serde(default)]
-    charsets: Vec<String>,
-    #[serde(default)]
-    extra: String,
     codes: Vec<String>,
     assignments: HashMap<String, String>,
     #[serde(skip)]
     pub dirty: bool,
 }
 impl StableHints {
-    fn pool(&self, count: usize) -> Vec<String> {
-        if self.charsets.is_empty() {
-            pool(&self.alphabet, count)
-        } else {
-            let rows = self
-                .charsets
-                .iter()
-                .map(|row| row.chars().collect())
-                .collect::<Vec<_>>();
-            let mut codes = crate::codes::generate(&rows, &self.extra.chars().collect::<Vec<_>>());
-            codes.truncate(count);
-            codes
-        }
-    }
-
     pub fn load(path: &std::path::Path) -> Self {
         let valid = || -> Option<Self> {
             if std::fs::metadata(path).ok()?.len() > 1024 * 1024 {
                 return None;
             }
-            let state: Self = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-            let config = Config {
-                hint_alphabet: state.alphabet.clone(),
-                hint_charsets: state.charsets.clone(),
-                hint_extra: state.extra.clone(),
-                ..Config::default()
-            };
-            if config.validate_hint_charsets().is_err()
+            let mut state: Self = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+            if crate::config::validate_charset(&state.alphabet, 2).is_err()
                 || state.codes.len() > 8192
-                || state.codes != state.pool(state.codes.len())
             {
                 return None;
             }
@@ -78,19 +48,28 @@ impl StableHints {
             {
                 return None;
             }
+            // Migrate old unbounded/per-position caches without discarding
+            // assignments that are still valid in the short-hint pool.
+            state.resize_pool(state.codes.len());
             Some(state)
         };
         valid().unwrap_or_default()
     }
+
+    fn resize_pool(&mut self, count: usize) {
+        let codes = pool(&self.alphabet, count);
+        if self.codes != codes {
+            self.codes = codes;
+            let allowed: HashSet<_> = self.codes.iter().collect();
+            self.assignments.retain(|_, code| allowed.contains(code));
+            self.dirty = true;
+        }
+    }
+
     pub fn sync(&mut self, config: &Config, ids: &[String]) {
-        if self.alphabet != config.hint_alphabet
-            || self.charsets != config.hint_charsets
-            || self.extra != config.hint_extra
-        {
+        if self.alphabet != config.hint_alphabet {
             *self = Self {
                 alphabet: config.hint_alphabet.clone(),
-                charsets: config.hint_charsets.clone(),
-                extra: config.hint_extra.clone(),
                 dirty: true,
                 ..Self::default()
             };
@@ -103,9 +82,10 @@ impl StableHints {
         let before = self.assignments.len();
         self.assignments.retain(|id, _| live.contains(id));
         self.dirty |= before != self.assignments.len();
-        if self.codes.len() < ids.len() {
-            self.codes = self.pool(ids.len());
-            self.dirty = true;
+        // Retain the high-water pool when windows close to avoid renaming
+        // familiar hints. New assignments always take an available single first.
+        if self.codes.len() < live.len() && self.codes.len() < self.alphabet.len().pow(2) {
+            self.resize_pool(live.len());
         }
         let mut sorted = ids.to_vec();
         sorted.sort();
@@ -139,60 +119,120 @@ impl StableHints {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn custom_positions_expand_after_short_codes_without_reassigning_or_panicking_on_capacity() {
-        let mut config = Config::default();
-        config.hint_charsets = vec!["A;".into(), "1 ".into()];
-        config.hint_extra = "Q/".into();
-        let mut hints = StableHints::default();
-        let ids: Vec<_> = (0..4).map(|i| i.to_string()).collect();
-        hints.sync(&config, &ids);
-        assert!(hints.codes.iter().all(|code| code.len() == 2));
-        let before = hints.assignments.clone();
-        let more: Vec<_> = (0..20).map(|i| i.to_string()).collect();
-        hints.sync(&config, &more);
-        assert_eq!(hints.assignments.len(), 12);
-        assert!(more.iter().any(|id| hints.get(id).is_empty()));
-        for (id, code) in before {
-            assert_eq!(hints.get(&id), code);
-        }
-        for a in &hints.codes {
-            for b in &hints.codes {
-                if a != b {
-                    assert!(!a.starts_with(b));
-                }
+    fn check_codes(codes: &[String]) {
+        let unique: HashSet<_> = codes.iter().collect();
+        assert_eq!(unique.len(), codes.len());
+        for code in codes {
+            assert!((1..=2).contains(&code.len()), "{code}");
+            if code.len() == 2 {
+                assert!(!unique.contains(&code[..1].to_string()), "{code}");
             }
         }
-        let path = std::env::temp_dir().join(format!(
-            "beaconhop-hints-{}-custom.json",
-            std::process::id()
-        ));
-        std::fs::write(&path, serde_json::to_vec(&hints).unwrap()).unwrap();
-        assert_eq!(StableHints::load(&path).assignments, hints.assignments);
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
-    fn existing_saved_alphabet_assignments_survive_schema_migration() {
-        let config = Config::default();
+    fn all_capacity_boundaries_prefer_singles_and_never_exceed_two_keys() {
+        for alphabet in ["AS", "A; ", "ASDF", "ASDFGHJKLQWERTYUIOPZXCVBNM"] {
+            let n = alphabet.len();
+            let mut previous = Vec::new();
+            for count in 0..=n * n + 2 {
+                let codes = pool(alphabet, count);
+                check_codes(&codes);
+                assert_eq!(codes.len(), count.min(n * n));
+                assert!(codes
+                    .iter()
+                    .all(|code| code.chars().all(|c| alphabet.contains(c))));
+                // An independent prefix-free capacity bound: each remaining
+                // single consumes one of N branches, leaving N pairs per other branch.
+                let singles = codes.iter().filter(|code| code.len() == 1).count();
+                if count <= n {
+                    assert_eq!(singles, count);
+                    assert_eq!(codes.concat(), alphabet[..count]);
+                } else if count <= n * n {
+                    assert!(singles + (n - singles) * n >= count);
+                    assert!(singles == 0 || singles + 1 + (n - singles - 1) * n < count);
+                }
+                for old in previous {
+                    if !codes.contains(&old) {
+                        assert_eq!(old.len(), 1, "existing pairs must stay fixed");
+                        assert!(codes.iter().any(|code| code.starts_with(&old)));
+                    }
+                }
+                previous = codes;
+            }
+        }
+    }
+
+    #[test]
+    fn expansion_only_reassigns_the_single_that_becomes_a_prefix() {
+        let config = Config {
+            hint_alphabet: "ASD".into(),
+            ..Config::default()
+        };
         let mut hints = StableHints::default();
-        hints.sync(&config, &["existing-window".into()]);
-        let mut old = serde_json::to_value(&hints).unwrap();
-        old.as_object_mut().unwrap().remove("charsets");
-        old.as_object_mut().unwrap().remove("extra");
+        for count in 1..=11 {
+            let before = hints.assignments.clone();
+            let ids: Vec<_> = (0..count).map(|i| i.to_string()).collect();
+            hints.sync(&config, &ids);
+            assert_eq!(hints.assignments.len(), count.min(9));
+            check_codes(&hints.assignments.values().cloned().collect::<Vec<_>>());
+            for (id, old) in before {
+                if hints.codes.contains(&old) {
+                    assert_eq!(hints.get(&id), old);
+                } else {
+                    assert_eq!(old.len(), 1);
+                    assert!(hints.codes.iter().any(|code| code.starts_with(&old)));
+                }
+            }
+            // Reordering and repeated inventories cannot reshuffle assignments.
+            let before = hints.assignments.clone();
+            hints.dirty = false;
+            hints.sync(&config, &ids.into_iter().rev().collect::<Vec<_>>());
+            assert_eq!(hints.assignments, before);
+            assert!(!hints.dirty);
+        }
+        let before = hints.assignments.clone();
+        let remaining: Vec<_> = before.keys().take(3).cloned().collect();
+        hints.sync(&config, &remaining);
+        for id in remaining {
+            assert_eq!(hints.get(&id), before[&id]);
+        }
+    }
+
+    #[test]
+    fn old_long_and_per_position_caches_migrate_without_losing_compatible_hints() {
         let path = std::env::temp_dir().join(format!(
             "beaconhop-hints-{}-legacy.json",
             std::process::id()
         ));
+        let old = serde_json::json!({
+            "alphabet": "ASDF", "charsets": ["AS", "DF"], "extra": "Q",
+            "codes": ["A", "S", "DA", "DS", "FA", "FS", "DDA"],
+            "assignments": {"single": "A", "pair": "FA", "old-long": "DDA"}
+        });
         std::fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
-        let mut restored = StableHints::load(&path);
-        restored.sync(&config, &["existing-window".into(), "new-window".into()]);
-        assert_eq!(
-            restored.get("existing-window"),
-            hints.get("existing-window")
+        let mut hints = StableHints::load(&path);
+        assert!(hints.dirty);
+        assert_eq!(hints.get("single"), "A");
+        assert_eq!(hints.get("pair"), "FA");
+        assert_eq!(hints.get("old-long"), "");
+        let config = Config {
+            hint_alphabet: "ASDF".into(),
+            ..Config::default()
+        };
+        hints.sync(
+            &config,
+            &["single".into(), "pair".into(), "old-long".into()],
         );
+        assert!(!hints.get("old-long").is_empty());
+        check_codes(&hints.codes);
+        std::fs::write(&path, serde_json::to_vec(&hints).unwrap()).unwrap();
+        let restored = StableHints::load(&path);
+        assert_eq!(restored.assignments, hints.assignments);
+        assert!(!restored.dirty);
         std::fs::remove_file(path).unwrap();
     }
+
     #[test]
     fn stable_codes_survive_growth_reorder_rename_scope_and_restart() {
         let mut config = Config::default();
@@ -221,6 +261,7 @@ mod tests {
         assert_eq!(hints.assignments.len(), 150);
         config.hint_alphabet = "ASDF".into();
         hints.sync(&config, &more);
+        assert_eq!(hints.assignments.len(), 16);
         assert!(hints
             .assignments
             .values()

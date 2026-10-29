@@ -18,8 +18,6 @@ pub struct Config {
     pub include_minimized: bool,
     pub include_hidden: bool,
     pub hint_alphabet: String,
-    pub hint_charsets: Vec<String>,
-    pub hint_extra: String,
     pub thumbnails: bool,
     pub panel_opacity: u8,
     pub hint_style: HintStyle,
@@ -90,7 +88,12 @@ pub enum Scope {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            hold_shortcut: "Alt+Tab".into(),
+            hold_shortcut: if cfg!(target_os = "windows") {
+                "Super+Tab"
+            } else {
+                "Alt+Tab"
+            }
+            .into(),
             search_shortcut: "Super+Backquote".into(),
             search_entry_key: "Backquote".into(),
             hold_enabled: true,
@@ -99,8 +102,6 @@ impl Default for Config {
             include_minimized: true,
             include_hidden: true,
             hint_alphabet: "ASDFGHJKLQWERTYUIOPZXCVBNM".into(),
-            hint_charsets: vec![],
-            hint_extra: String::new(),
             thumbnails: true,
             panel_opacity: 24,
             hint_style: HintStyle::default(),
@@ -187,45 +188,7 @@ impl Shortcut {
 
 impl Config {
     pub fn hint_contains(&self, character: char) -> bool {
-        if self.hint_charsets.is_empty() {
-            self.hint_alphabet.contains(character)
-        } else {
-            self.hint_extra.contains(character)
-                || self.hint_charsets.iter().any(|row| row.contains(character))
-        }
-    }
-
-    pub(crate) fn validate_hint_charsets(&self) -> Result<(), String> {
-        if self.hint_charsets.is_empty() {
-            validate_charset(&self.hint_alphabet, 2)?;
-        } else {
-            if self.hint_charsets.len() > 8 {
-                return Err("提示最多 8 位 / Use at most 8 hint positions".into());
-            }
-            for row in &self.hint_charsets {
-                validate_charset(row, 1)?;
-            }
-            validate_charset(&self.hint_extra, 0)?;
-            if self
-                .hint_extra
-                .chars()
-                .any(|c| self.hint_charsets[0].contains(c))
-            {
-                return Err("额外前缀不能与第一位字符重复 / Extra prefixes must differ from the first position".into());
-            }
-            let capacity = self
-                .hint_charsets
-                .iter()
-                .try_fold(1usize, |n, row| n.checked_mul(row.len()))
-                .and_then(|n| n.checked_mul(1 + self.hint_extra.len()));
-            if capacity.is_none_or(|n| n > 8192) {
-                return Err(
-                    "字符组合超过 8192 个，请减少字符或位数 / Limit hint combinations to 8192"
-                        .into(),
-                );
-            }
-        }
-        Ok(())
+        self.hint_alphabet.contains(character)
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -254,7 +217,7 @@ impl Config {
                 "搜索键、循环键与提示字符不能冲突 / Search, cycling and hint keys must not conflict".into(),
             );
         }
-        self.validate_hint_charsets()?;
+        validate_charset(&self.hint_alphabet, 2)?;
         if !["grid", "list"].contains(&self.layout.as_str()) {
             return Err("Unknown layout".into());
         }
@@ -329,50 +292,38 @@ pub fn save(path: &Path, config: &Config) -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
-    fn flexible_charsets_reject_unreachable_or_ambiguous_keys() {
+    fn flexible_characters_reject_unreachable_or_ambiguous_keys() {
         let mut config = Config::default();
         config.hint_alphabet = "AS12;? ".into();
         config.validate().unwrap();
-        config.hint_charsets = vec!["A1; ".into(), "J/?".into()];
-        config.hint_extra = "Q\\".into();
-        config.validate().unwrap();
-        config.hint_extra = "A".into();
-        assert!(config.validate().unwrap_err().contains("first position"));
-        config.hint_extra = "~".into();
+        config.hint_alphabet.push('~');
         assert!(config.validate().unwrap_err().contains("conflict"));
-        config.search_entry_key = "2".into();
+        config.search_entry_key = "9".into();
         config.validate().unwrap();
-        config.hint_extra = "@".into(); // Shift+2 would otherwise enter search.
-        assert!(config.validate().is_err());
-        config.hint_extra.clear();
-        for invalid in ["AA", "", "é", "\n", "a"] {
-            config.hint_charsets[1] = invalid.into();
+        config.hint_alphabet.push('('); // Shift+9 would otherwise enter search.
+        assert!(config.validate().unwrap_err().contains("conflict"));
+        for invalid in ["AA", "", "A", "é", "AS\n", "as"] {
+            config.hint_alphabet = invalid.into();
             assert!(config.validate().is_err());
         }
-        config.hint_charsets = vec!["ASDFGHJKL".into(); 8];
-        assert!(config.validate().unwrap_err().contains("8192"));
     }
 
     #[test]
     fn old_settings_get_new_defaults_and_customizations_round_trip() {
         let mut old = serde_json::to_value(Config::default()).unwrap();
         let fields = old.as_object_mut().unwrap();
-        for key in [
-            "searchEntryKey",
-            "hintStyle",
-            "panelOpacity",
-            "hintCharsets",
-            "hintExtra",
-        ] {
+        for key in ["searchEntryKey", "hintStyle", "panelOpacity"] {
             fields.remove(key);
         }
         fields.insert("searchShortcut".into(), "Super+Backslash".into());
+        fields.insert("hintAlphabet".into(), "AS12;? ".into());
+        fields.insert("hintCharsets".into(), serde_json::json!(["AS", "JK"]));
+        fields.insert("hintExtra".into(), "Q".into());
         let mut restored: Config = serde_json::from_value(old).unwrap();
+        assert_eq!(restored.hint_alphabet, "AS12;? ");
         assert_eq!(restored.search_entry_key, "Backquote");
         assert_eq!(restored.search_shortcut, "Super+Backslash");
         assert_eq!(restored.hint_style, HintStyle::default());
-        assert!(restored.hint_charsets.is_empty());
-        assert!(restored.hint_extra.is_empty());
         restored.search_entry_key = "Backslash".into();
         restored.hint_style.opacity = 65;
         restored.hint_style.font_size = 36;
@@ -381,6 +332,9 @@ mod tests {
         let saved: Config =
             serde_json::from_slice(&serde_json::to_vec(&restored).unwrap()).unwrap();
         assert_eq!(saved, restored);
+        let serialized = serde_json::to_value(saved).unwrap();
+        assert!(serialized.get("hintCharsets").is_none());
+        assert!(serialized.get("hintExtra").is_none());
     }
     #[test]
     fn search_key_conflicts_and_invalid_styles_are_rejected() {
