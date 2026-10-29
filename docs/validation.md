@@ -6,13 +6,13 @@ Updated: 2026-10-29. Source implementation, packaged builds and native acceptanc
 
 | Check | Evidence / result |
 | --- | --- |
-| Rust interaction and configuration tests | 23 passed: hint allocation, immediate activation and key release ownership, partial-hint cancellation, MRU including rapid pending activations and failed-activation reconciliation, independent scopes, Unicode/phrase search, closed targets, empty inventories, modifier sides and ANSI/ISO grave-key mapping |
+| Rust interaction and configuration tests | 41 passed, including hint allocation, activation/key release ownership, MRU, independent scopes, multilingual search and Finder aliases, configurable search entry, hint appearance migration/validation and release discovery |
 | Frontend production build | TypeScript and Vite passed; embedded assets are used by both release binaries |
-| Browser interaction tests | 10 Playwright tests passed: settings save/discard and independent scopes; IME composition Enter; search/empty results/caret navigation; minimum-window light theme layout; a working keyboard hook without Input Monitoring; collapsed recovery and screen-permission button feedback; shortcut recording/default feedback; all-visible aspect-preserving layouts for 6/24/80 windows |
+| Browser interaction tests | 23 Playwright tests passed, covering settings and scopes, IME/search/navigation, permission feedback, shortcut recording/manual/default handling, all-visible layouts, customizable hints and simulated signed-update states |
 | Dependency/version/style checks | npm audit: 0 reported vulnerabilities; version consistency, Rust formatting and Git whitespace checks passed |
 | macOS builds | Apple Silicon debug app and optimized app + DMG built locally; ad-hoc bundle signature and DMG checksum verified; packaged release startup smoke passed; Swift bridge compiled for a macOS 14 deployment target |
 | Windows builds | MSVC x86-64 debug and optimized GUI EXE cross-compiled on this Mac; NSIS installer successfully generated |
-| CI definitions | Native macOS/Windows checks and manual package workflow added; not executed remotely because this new project has no publishing remote |
+| CI definitions | Native macOS/Windows checks run on source pushes; packaging is manual and defaults to no publication. See the dated entries below for current-run evidence. |
 
 ## macOS native evidence
 
@@ -129,6 +129,12 @@ Both settings and the switcher now use active native Sidebar vibrancy on macOS a
 
 Signed updater discovery, download progress, verification/install/restart and error recovery are implemented. Browser tests simulate successful downloads/install, verification failure before installation and retry after a network failure. Rust tests verify semantic-version ordering, downgrade prevention and repository-bound redirects. The manual package workflow and manifest generator validate successfully. These checks do not establish a real old-to-new update: no release has been published. The current source repository is private; a public update channel remains a distribution decision. See [update setup](updates.md).
 
+The final source was committed and pushed as `1c29779eab978697e4817512345a8d3ac6392cb9`. Optimized macOS app/DMG and Windows x64 EXE/NSIS builds passed. Both real updater packages were signed with the BeaconHop key and verified against the committed public key; modifying a byte was rejected on both. A complete two-platform manifest was generated locally. Evidence: `logs/updates-package-verification.json`, `logs/updates-macos-signed-build.log`, `logs/updates-windows-signed-build.log` and `logs/updates-windows-signed-bundle.log`.
+
+The corresponding native-host CI run is [Check BeaconHop #40807299963](https://github.com/alvinfunborn/beaconhop/actions/runs/40807299963). The documentation-only follow-up does not rebuild these unchanged binaries.
+
+The final Mac app was installed at 10:37 on 2026-10-29, preserving settings and the native icon catalog. Its executable SHA-256 is `4ae4886046571354f40e775c5dcd03b124eb0d39c8279165030e00d5d6ce39ba`, matching the bundled source executable. macOS invalidated the earlier ad-hoc application's grant. Restoring BeaconHop's own Accessibility switch through standard System Settings reached a Touch ID/password sheet; it currently awaits the user's local authentication. The final executable is therefore installed but is not yet accepted for native keyboard/focus behavior. No security database edits or authentication bypasses were used. Evidence: `logs/updates-final-install.json`, `logs/updates-final-diagnostics.txt`, `logs/updates-final-auth-current.txt`.
+
 ## Remaining acceptance
 
 **Windows native execution is pending an accessible Windows machine or VM.** Compilation and installer generation do not prove hook interception, DWM preview composition, focus transfer, virtual desktop compatibility, high DPI behavior or installation. Initial desktop-switching support follows `winvd` 0.0.49: Windows 11 24H2 build 26100.2605 or later (upstream also reports testing 25H2 build 26200.8117). Older Windows versions are not accepted targets yet.
@@ -145,4 +151,4 @@ Builds are local development distributions: macOS uses an ad-hoc signature (`sig
 - The Windows build used cargo-xwin, the Microsoft SDK/CRT, clang in MSVC mode, rust-lld, Zig's resource compiler and NSIS. The downloaded Tauri NSIS utility DLL matched the SHA-1 pinned by Tauri (`6532da4545864c6ec95f62f27f2199bfd668560b`). See [Tauri's cross-build guide](https://v2.tauri.app/distribute/windows-installer/#build-windows-apps-on-linux-and-macos).
 - macOS Space membership and unlisted AX root acquisition use dynamically resolved private APIs. The AX remote-token ABI and published-window limitation were researched in [AltTab's API wrapper](https://github.com/lwouis/alt-tab-macos/blob/master/src/macos/api-wrappers/AXUIElement.swift); BeaconHop's bounded discovery/cache implementation is independent. These paths need regression checks when macOS changes.
 - Diagnostics exclude window titles by default. Test screenshots and traces stay in ignored `logs/`. Neither the Screen Buoy working tree nor its unpublished edits were modified.
-- CI uses `macos-15` for Apple Silicon builds while retaining a macOS 14 deployment target. The previous `macos-14` runner is being retired; see [GitHub's retirement notice](https://github.blog/changelog/2026-10-01-github-actions-macos-14-runner-image-retirement/). Remote CI execution remains pending a repository remote.
+- CI uses `macos-15` for Apple Silicon builds while retaining a macOS 14 deployment target. The previous `macos-14` runner is being retired; see [GitHub's retirement notice](https://github.blog/changelog/2026-10-01-github-actions-macos-14-runner-image-retirement/).
