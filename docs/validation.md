@@ -1,6 +1,6 @@
 # BeaconHop validation ledger
 
-Updated: 2026-10-28. Source implementation, packaged builds and native acceptance are separate.
+Updated: 2026-10-29. Source implementation, packaged builds and native acceptance are separate. Dated entries describe their respective build, not necessarily the current executable.
 
 ## Completed checks
 
@@ -119,13 +119,23 @@ Final distributions were rebuilt successfully and the Apple Silicon app was inst
 
 The Mac auto-locked during final installation (`CGSSessionScreenIsLocked = 1`, foreground `loginwindow`). The final ad-hoc signature invalidated the earlier Accessibility grant; the new process currently reports Accessibility/input monitoring false and cannot install its keyboard hook. Native System Settings controls cannot be accessed while locked. The user has been asked to unlock locally; final regrant, restart/focus and repeat navigation acceptance remain pending that input. Earlier native checks above are explicitly for the preceding build, not proof that the final signed executable is authorized. No TCC database changes or security bypasses were used.
 
+## 2026-10-29: configurable hints, search entry and signed updater
+
+The current source passes 41 Rust tests and 23 browser interaction tests. Four targeted browser checks additionally passed after removing the old 28px badge-size ceiling: custom font size/colors/opacity/radius reach the actual switcher badges, and 6/24/80-window layouts remain visible without scrolling. Configuration tests cover migration from old settings, persisted hint styling, field validation and a separate configurable hold-to-search key. Backquote is now the default hold-to-search key; historical backslash checks above apply to earlier builds.
+
+Search indexing now includes the bundle ID/executable name in addition to localized application name and window title. Tests cover `Finder`, 访达, full pinyin/initials, title pinyin, index invalidation and explicit exclusion. On this Mac the actual Finder AX window inventory includes 下载; the stored exclusion list is empty. The gray exclusion placeholder is an example, not an active rule.
+
+Both settings and the switcher now use active native Sidebar vibrancy on macOS and Acrylic on Windows, behind a configurable surface tint (default 24%). Hint appearance has independent background opacity. A native screenshot from the intermediate installed build shows background color variation through the switcher; subjective visual acceptance remains with the user. After its installation and normal System Settings regrant, native diagnostics confirmed Accessibility, Input Monitoring, Screen Recording and the keyboard hook ready, with previews present. An additional navigation/search automation attempt was interrupted by foreground changes and is not counted as a pass.
+
+Signed updater discovery, download progress, verification/install/restart and error recovery are implemented. Browser tests simulate successful downloads/install, verification failure before installation and retry after a network failure. Rust tests verify semantic-version ordering, downgrade prevention and repository-bound redirects. The manual package workflow and manifest generator validate successfully. These checks do not establish a real old-to-new update: no release has been published. The current source repository is private; a public update channel remains a distribution decision. See [update setup](updates.md).
+
 ## Remaining acceptance
 
 **Windows native execution is pending an accessible Windows machine or VM.** Compilation and installer generation do not prove hook interception, DWM preview composition, focus transfer, virtual desktop compatibility, high DPI behavior or installation. Initial desktop-switching support follows `winvd` 0.0.49: Windows 11 24H2 build 26100.2605 or later (upstream also reports testing 25H2 build 26200.8117). Older Windows versions are not accepted targets yet.
 
 Remaining broader acceptance includes Windows native input methods, rapid invocation and target destruction, additional macOS input methods, and both platforms' permission revocation/regrant, unresponsive/protected applications, sleep/wake, display removal, login startup and renderer recovery. Unit/browser evidence covers some of these rules but does not replace native checks. Mac Intel builds have not been produced on this host.
 
-Builds are local development distributions: macOS uses an ad-hoc signature (`signingIdentity = "-"`), with no Developer ID notarization; Windows has no Authenticode signature. No public release, domain registration or updater service has been configured.
+Builds are local development distributions: macOS uses an ad-hoc signature (`signingIdentity = "-"`), with no Developer ID notarization; Windows has no Authenticode signature. Updater package signing and manual GitHub release configuration are implemented. No public release or publicly accessible update source has been published.
 
 ## Packaging and implementation notes
 

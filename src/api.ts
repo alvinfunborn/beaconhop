@@ -9,6 +9,7 @@ export const preview =
 export const defaults: Config = {
   holdShortcut: "Alt+Tab",
   searchShortcut: "Super+Backquote",
+  searchEntryKey: "Backquote",
   holdEnabled: true,
   desktopScope: "all",
   displayScope: "all",
@@ -16,6 +17,8 @@ export const defaults: Config = {
   includeHidden: true,
   hintAlphabet: "ASDFGHJKLQWERTYUIOPZXCVBNM",
   thumbnails: true,
+  panelOpacity: 24,
+  hintStyle: { fontSize: 28, fontWeight: 700, color: "#19130a", background: "#ffcf48", opacity: 100, radius: 8, borderColor: "#30220c", borderWidth: 2, shadow: true },
   layout: "grid",
   theme: "system",
   language: "system",
@@ -72,6 +75,9 @@ export async function call<T>(
   if (!preview) throw new Error("Open BeaconHop as a desktop application.");
   let value: any;
   switch (name) {
+    case "get_release_status":
+      value = { currentVersion: __APP_VERSION__, published: false, version: "", notes: "", newer: false, canInstall: false };
+      break;
     case "get_settings":
       value = config;
       break;
@@ -96,7 +102,7 @@ export async function call<T>(
       break;
     case "get_diagnostics":
       value = {
-        version: "0.1.0",
+        version: __APP_VERSION__,
         platform: "preview",
         windowCount: 6,
         displayCount: 2,
@@ -114,7 +120,7 @@ export async function call<T>(
       session.query = String(args.query);
       session.resultIds = session.windows
         .filter((w) =>
-          (w.appName + " " + w.title)
+          (w.appName + " " + w.title + " " + w.appId)
             .toLowerCase()
             .includes(session.query.toLowerCase()),
         )

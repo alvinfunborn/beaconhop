@@ -3,6 +3,9 @@ import type { Config, Session, Permissions, Destination } from "./types";
 import { call, subscribe, defaults, native, preview } from "./api";
 import { tileWindows, type Tile } from "./layout";
 import { usePreviews } from "./previews";
+import { Updates } from "./Updates";
+import { HintAppearance } from "./HintAppearance";
+import { hintVariables } from "./hints";
 const isMac = navigator.platform.toLowerCase().includes("mac");
 const windowsNative =
   native && navigator.platform.toLowerCase().includes("win");
@@ -15,7 +18,7 @@ function shortcut(s: string) {
     .replace("Control", isMac ? "⌃" : "Ctrl")
     .replaceAll("+", " + ");
 }
-function parseShortcutText(text: string): string | null {
+function parseShortcutText(text: string, singleKey = false): string | null {
   const parts = text.trim().replace(/[⌘⌥⌃⇧]\s*\+?\s*/g, (s) => ({ "⌘": "Super+", "⌥": "Alt+", "⌃": "Ctrl+", "⇧": "Shift+" })[s[0]]!).split("+").map((s) => s.trim());
   const modifiers = new Set<string>();
   let key = "";
@@ -31,6 +34,7 @@ function parseShortcutText(text: string): string | null {
       if (!key) return null;
     }
   }
+  if (singleKey) return key && key !== "Tab" && modifiers.size === 0 ? key : null;
   if (!key || !["Ctrl", "Alt", "Super"].some((m) => modifiers.has(m))) return null;
   return [...["Ctrl", "Alt", "Super", "Shift"].filter((m) => modifiers.has(m)), key].join("+");
 }
@@ -84,6 +88,7 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
   const [permissions, setPermissions] = useState<Permissions>();
   const [pendingPermission, setPendingPermission] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [updateBusy, setUpdateBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [diagnostics, setDiagnostics] = useState("");
@@ -237,12 +242,12 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
     ["about", "◎", t("About", "关于")],
   ];
   return (
-    <div className="settings-shell">
+    <div className="settings-shell" style={{"--surface-opacity": `${draft.panelOpacity}%`} as CSSProperties}>
       <aside>
         <a className="brand">
           <img src="/beaconhop.svg" />
           <span>
-            BeaconHop<small>WORK NAVIGATION</small>
+            BeaconHop<small>WINDOW SWITCHER</small>
           </span>
         </a>
         <nav>
@@ -267,7 +272,7 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
           {permissions?.ready
             ? t("Ready to hop", "随时跳转")
             : t("Access needed", "需要授权")}
-          <small>v0.1.0{preview ? " · Preview" : ""}</small>
+          <small>v{__APP_VERSION__}{preview ? " · Preview" : ""}</small>
         </div>
       </aside>
       <main className="settings-main">
@@ -305,8 +310,8 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                   </h2>
                   <p>
                     {t(
-                      "Your work is already open. Take the shortest way back.",
-                      "工作现场已经打开，用最短的路径回去。",
+                      "Your windows are already open. Hop to the one you need.",
+                      "窗口已经打开，随时轻松切换。",
                     )}
                   </p>
                 </div>
@@ -356,15 +361,22 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                     defaultValue={defaults.searchShortcut}
                   />
                 </Setting>
-                <div className="tip">
-                  <kbd>\</kbd>
-                  <span>
-                    {t(
-                      "Press backslash while holding to enter search. You can let go of the modifier.",
-                      "在按住模式按反斜杠进入搜索，此时可以松开修饰键。",
-                    )}
-                  </span>
-                </div>
+                <Setting
+                  title={t("Search key while holding", "按住时进入搜索")}
+                  description={t(
+                    "Press this key in hold mode to enter search, then release the modifier. Choose a key that is not used for hints or cycling.",
+                    "在按住模式按此键进入搜索，之后可以松开修饰键。不要与提示字母或循环键重复。",
+                  )}
+                >
+                  <Shortcut
+                    value={draft.searchEntryKey}
+                    onChange={(v) => change("searchEntryKey", v)}
+                    label={t("Search key while holding", "按住时进入搜索")}
+                    zh={zh}
+                    defaultValue={defaults.searchEntryKey}
+                    singleKey
+                  />
+                </Setting>
               </section>
               <section>
                 <h2>{t("Your hint alphabet", "顺手的提示字母")}</h2>
@@ -404,8 +416,8 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
             <>
               <p className="intro">
                 {t(
-                  "Choose how much of your work comes into view. Desktop and display filters are independent.",
-                  "决定一次看到多大范围的工作。桌面和显示器可以独立设置。",
+                  "Choose which windows appear. Desktop and display filters are independent.",
+                  "选择要显示的窗口范围。桌面和显示器可以独立设置。",
                 )}
               </p>
               <section>
@@ -455,15 +467,15 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                 <h2>{t("Keep these out", "排除这些应用")}</h2>
                 <p className="muted">
                   {t(
-                    "One exact app name or bundle ID / executable path per line.",
-                    "每行一个完整应用名，或 bundle ID / 可执行文件路径。",
+                    "One exact app name or bundle ID / executable path per line. Empty means no exclusions; the examples below are only suggestions.",
+                    "每行一个完整应用名，或 bundle ID / 可执行文件路径。留空表示不排除；下方灰字仅为示例。",
                   )}
                 </p>
                 <textarea
                   aria-label={t("Excluded applications", "排除应用")}
                   placeholder={
                     isMac
-                      ? "com.apple.finder\nMusic"
+                      ? "com.example.app\nExample App"
                       : "notepad\nC:\\Apps\\example.exe"
                   }
                   value={draft.excludedApps.join("\n")}
@@ -516,6 +528,12 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                   ["zh", "简体中文"],
                 ])}
               </section>
+              <section>
+                <Setting title={t("Panel opacity", "面板不透明度")} description={t("Lower values reveal more of the native desktop blur. Reduce Transparency in system settings can override this.", "降低数值可透出更多桌面毛玻璃。系统的“减少透明度”设置可能覆盖此效果。") }>
+                  <input aria-label={t("Panel opacity", "面板不透明度")} type="range" min={0} max={100} value={draft.panelOpacity} onChange={e => change("panelOpacity",Number(e.target.value))} /><output>{draft.panelOpacity}%</output>
+                </Setting>
+              </section>
+              <HintAppearance value={draft.hintStyle} defaults={defaults.hintStyle} onChange={value => change("hintStyle",value)} t={t} />
               <div className="appearance-preview">
                 <div className="mini-card">
                   <div className="mini-screen">
@@ -558,8 +576,8 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                   "startAtLogin",
                   t("Launch at login", "登录时启动"),
                   t(
-                    "Have BeaconHop ready when you start working.",
-                    "开始工作时，BeaconHop 已经就绪。",
+                    "Keep BeaconHop ready as soon as you log in.",
+                    "登录后，BeaconHop 随时待命。",
                   ),
                 )}
                 {toggle(
@@ -668,22 +686,23 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
               </section>
             </>
           )}
+          <section hidden={tab !== "system"}><Updates t={t} dirty={dirty} onBusy={setUpdateBusy} /></section>
           {tab === "about" && (
             <div className="about">
               <img src="/beaconhop.svg" />
               <h1>BeaconHop</h1>
-              <p className="tagline">Follow the hint. Hop to your work.</p>
+              <p className="tagline">Follow the hint. Make the hop.</p>
               <p>
                 {t(
-                  "A little beacon for wherever your work takes you.",
-                  "无论工作延伸到哪里，总有一个信号带你抵达。",
+                  "A little beacon for any window you want to reach.",
+                  "想去哪个窗口，就循着提示抵达。",
                 )}
               </p>
-              <span className="badge">0.1.0 · macOS & Windows</span>
+              <span className="badge">{__APP_VERSION__} · macOS & Windows</span>
               <div className="about-details">
                 <p>
                   {t(
-                    "Built on Screen Buoy. Open source under the MIT license.",
+                    "Built on Screen Buoy. Licensed under MIT.",
                     "基于 Screen Buoy 改造，采用 MIT 开源许可证。",
                   )}
                 </p>
@@ -707,12 +726,12 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
               (dirty
                 ? t("Unsaved changes", "有未保存的修改")
                 : t(
-                    "Follow the hint. Hop to your work.",
-                    "循着提示，回到工作。",
+                    "Follow the hint. Make the hop.",
+                    "循着提示，轻松切换。",
                   ))}
           </span>
           <div>
-            <button className="button ghost" disabled={dirty || busy}
+            <button className="button ghost" disabled={dirty || busy || updateBusy}
               title={dirty ? t("Save or discard your changes before restarting", "请先保存或撤销修改，再重启") : undefined}
               onClick={async () => {
                 try { setNotice(t("Restarting…", "正在重启…")); await call("restart_application"); }
@@ -720,7 +739,7 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
               }}>{t("Restart BeaconHop", "重启 BeaconHop")}</button>
             <button
               className="button ghost"
-              disabled={!dirty || busy}
+              disabled={!dirty || busy || updateBusy}
               onClick={() => {
                 setDraft(initial);
                 setError("");
@@ -730,7 +749,7 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
             </button>
             <button
               className="button primary"
-              disabled={!dirty || busy}
+              disabled={!dirty || busy || updateBusy}
               onClick={save}
             >
               {busy ? t("Saving…", "保存中…") : t("Save changes", "保存设置")}
@@ -760,8 +779,8 @@ function Setting({
     </div>
   );
 }
-function Shortcut({ value, onChange, label, zh, defaultValue }: {
-  value: string; onChange: (v: string) => void; label: string; zh: boolean; defaultValue: string;
+function Shortcut({ value, onChange, label, zh, defaultValue, singleKey = false }: {
+  value: string; onChange: (v: string) => void; label: string; zh: boolean; defaultValue: string; singleKey?: boolean;
 }) {
   const [recording, setRecording] = useState(false);
   const [manual, setManual] = useState(false);
@@ -777,9 +796,11 @@ function Shortcut({ value, onChange, label, zh, defaultValue }: {
     setManual(false);
   };
   const applyText = () => {
-    const next = parseShortcutText(text);
+    const next = parseShortcutText(text, singleKey);
     if (next) finish.current(next);
-    else setFeedback(zh ? "请输入修饰键 + 按键，例如 Win + ` 或 Win + \\" : "Use a modifier and key, such as Win + ` or Win + \\");
+    else setFeedback(singleKey
+      ? (zh ? "请输入单个按键，例如 `、\\ 或 Space，不需要修饰键。" : "Use one key without modifiers, such as `, \\ or Space.")
+      : (zh ? "请输入修饰键 + 按键，例如 Win + ` 或 Win + \\" : "Use a modifier and key, such as Win + ` or Win + \\"));
   };
   useEffect(() => {
     if (!recording) return;
@@ -788,7 +809,7 @@ function Shortcut({ value, onChange, label, zh, defaultValue }: {
     (async () => {
       off = await subscribe<string>("shortcut-recorded", (next) => finish.current(next));
       if (disposed) { off(); return; }
-      const ready = await call<boolean>("record_shortcut", { enabled: true });
+      const ready = await call<boolean>("record_shortcut", { enabled: true, singleKey });
       if (disposed) { await call("record_shortcut", { enabled: false }); return; }
       if (native && !ready) setFeedback(zh ? "辅助功能尚未就绪；若按键被系统或其他应用接走，请使用手动输入。" : "Accessibility is not ready. Use manual entry if another app or macOS intercepts the keys.");
     })().catch((e) => { if (!disposed) { setFeedback(String(e)); setRecording(false); } });
@@ -797,7 +818,7 @@ function Shortcut({ value, onChange, label, zh, defaultValue }: {
       off();
       call("record_shortcut", { enabled: false }).catch(() => {});
     };
-  }, [recording]);
+  }, [recording, singleKey]);
   return <div className="shortcut-editor">
     <button
       className={"shortcut " + (recording ? "recording" : "")}
@@ -815,15 +836,17 @@ function Shortcut({ value, onChange, label, zh, defaultValue }: {
         const modifiers = [e.ctrlKey ? "Ctrl" : "", e.altKey ? "Alt" : "", e.metaKey ? "Super" : "", e.shiftKey ? "Shift" : ""].filter(Boolean);
         const key = e.code === "Backquote" || (e.code === "IntlBackslash" && ["`", "~"].includes(e.key)) ? "Backquote"
           : e.code.startsWith("Key") ? e.code.slice(3) : e.code.startsWith("Digit") ? e.code.slice(5) : e.code;
-        const next = parseShortcutText([...modifiers, key].join("+"));
+        const next = parseShortcutText([...modifiers, key].join("+"), singleKey);
         if (next) finish.current(next);
-        else setFeedback(zh ? "请同时按住 Alt、Ctrl 或 Win / ⌘，再按目标键。" : "Hold Alt, Ctrl or Win / Command with the target key.");
+        else setFeedback(singleKey
+          ? (zh ? "请单独按下目标键，不需要修饰键。" : "Press the target key on its own, without modifiers.")
+          : (zh ? "请同时按住 Alt、Ctrl 或 Win / ⌘，再按目标键。" : "Hold Alt, Ctrl or Win / Command with the target key."));
       }}
     >{recording ? (zh ? "请按下快捷键…" : "Press shortcut…") : shortcut(value)}</button>
     <button className="shortcut-reset" aria-label={zh ? `手动输入${label}` : `Enter ${label} manually`} onClick={() => { setRecording(false); setManual(true); setText(value); setFeedback(""); }}>{zh ? "手动输入" : "Enter manually"}</button>
     <button className="shortcut-reset" aria-label={zh ? `恢复${label}默认值` : `Restore default ${label}`} onClick={() => finish.current(defaultValue)}>{zh ? "恢复默认" : "Restore default"}</button>
     {manual && <div className="shortcut-manual">
-      <input autoFocus value={text} aria-label={zh ? `${label}文本` : `${label} text`} spellCheck={false} placeholder="Win + `" onChange={(e) => setText(e.target.value)} onKeyDown={(e) => {
+      <input autoFocus value={text} aria-label={zh ? `${label}文本` : `${label} text`} spellCheck={false} placeholder={singleKey ? "`" : "Win + `"} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => {
         if (e.key === "Enter") { e.preventDefault(); applyText(); }
         if (e.key === "Escape") { e.preventDefault(); finish.current(""); }
       }} />
@@ -909,6 +932,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
   return (
     <div
       className={"switcher " + (config.layout === "list" ? "list-layout" : "")}
+      style={{"--surface-opacity": `${config.panelOpacity}%`} as CSSProperties}
       onKeyDown={(e) => {
         if (
           !isSearch ||
@@ -969,7 +993,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
             />
           ) : (
             <>
-              <h1>{t("Your next hop", "下一个工作现场")}</h1>
+              <h1>{t("Your next hop", "下一跳")}</h1>
               <p>
                 {t("Type a hint to go there", "按下提示字母，直接抵达")}
                 {session?.prefix && (
@@ -1019,6 +1043,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
             image={images[w.id] ?? null}
             tile={tiles.tiles[index]}
             selected={w.id === session?.selected}
+            hintStyle={config.hintStyle}
             thumbnails={config.thumbnails && config.layout === "grid"}
             sessionId={session?.sessionId ?? 0}
             search={isSearch}
@@ -1068,7 +1093,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
                 <kbd>Tab</kbd> {t("cycle", "循环")}
               </span>
               <span>
-                <kbd>\</kbd> {t("search", "搜索")}
+                <kbd>{shortcut(config.searchEntryKey)}</kbd> {t("search", "搜索")}
               </span>
             </>
           )}
@@ -1086,6 +1111,7 @@ function WindowCard({
   tile,
   selected,
   thumbnails,
+  hintStyle,
   sessionId,
   search,
   onSelect,
@@ -1096,6 +1122,7 @@ function WindowCard({
   tile?: Tile;
   selected: boolean;
   thumbnails: boolean;
+  hintStyle: Config["hintStyle"];
   sessionId: number;
   search: boolean;
   onSelect: () => void;
@@ -1134,6 +1161,8 @@ function WindowCard({
     };
     const observer = new ResizeObserver(update);
     observer.observe(node);
+    const badge = element.current?.querySelector(".window-hint");
+    if (badge) observer.observe(badge);
     window.addEventListener("scroll", update, true);
     window.addEventListener("resize", update);
     update();
@@ -1157,7 +1186,10 @@ function WindowCard({
       className={"window-card " + (selected ? "selected " : "") + (tile && tile.meta < 40 ? "dense" : "")}
       style={tile ? { left: tile.x + 14, top: tile.y + 14, width: tile.width, height: tile.height,
         "--tile-preview": `${tile.preview}px`, "--tile-meta": `${tile.meta}px`,
-        "--hint-size": `${Math.min(28, Math.max(10, tile.preview / 5))}px`,
+        "--hint-size": `${Math.max(8, Math.min(
+          (tile.preview - 2 * hintStyle.borderWidth - 12) / 1.55,
+          (tile.width - 2 * hintStyle.borderWidth - 12) / (w.hint.length * .65 + .96),
+        ))}px`,
       } as CSSProperties : { visibility: "hidden" }}
       onClick={onSelect}
       title={`${w.appName} — ${w.title}`}
@@ -1178,7 +1210,7 @@ function WindowCard({
             <small>{w.appName}</small>
           </div>
         )}
-        {!search && <kbd className="window-hint">{w.hint}</kbd>}
+        {!search && <kbd className="window-hint hint-badge" style={hintVariables(hintStyle)}>{w.hint}</kbd>}
         {w.minimized && (
           <span className="window-state">{zh ? "最小化" : "Minimized"}</span>
         )}

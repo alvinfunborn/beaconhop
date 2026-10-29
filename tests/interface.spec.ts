@@ -181,8 +181,8 @@ test("both shortcut editors record punctuation, allow manual input and restore i
   await page.goto("/?preview=1");
   const hold = page.getByRole("button", { name: "Hold shortcut", exact: true });
   const search = page.getByRole("button", { name: "Search shortcut", exact: true });
-  await expect(page.getByRole("button", { name: /^Restore default / })).toHaveCount(2);
-  await expect(page.getByRole("button", { name: /^Enter .* manually$/ })).toHaveCount(2);
+  await expect(page.getByRole("button", { name: /^Restore default / })).toHaveCount(3);
+  await expect(page.getByRole("button", { name: /^Enter .* manually$/ })).toHaveCount(3);
   await search.click();
   await search.press("Meta+Backslash");
   await expect(search).toHaveText(/\\/);
@@ -335,4 +335,118 @@ test("all four arrows navigate the visual grid from the search field",async ({pa
     await input.press(key);await expect(page.locator('[aria-selected="true"]')).toContainText(app);
   }
   expect(await page.locator(".switcher").evaluate(el=>getComputedStyle(el).backdropFilter)).toContain("blur");
+});
+
+test("hold-to-search key records a single key, saves independently and restores backquote", async ({page}) => {
+  await page.goto("/?preview=1");
+  const entry=page.getByRole("button",{name:"Search key while holding",exact:true});
+  const global=page.getByRole("button",{name:"Search shortcut",exact:true});
+  await expect(entry).toContainText("`");
+  await entry.click();await entry.press("Backslash");
+  await expect(entry).toContainText("\\");
+  await page.getByRole("button",{name:"Save changes"}).click();
+  let settings=await page.evaluate(async()=>(await import("/src/api.ts" as string)).call("get_settings"));
+  expect(settings.searchEntryKey).toBe("Backslash");expect(settings.searchShortcut).toBe("Super+Backquote");
+  await expect(global).toContainText("`");
+  await entry.click();await entry.press("Meta+Digit1");await expect(entry).toHaveAttribute("aria-pressed","true");await entry.press("Escape");
+  await page.getByRole("button",{name:"Enter Search key while holding manually",exact:true}).click();
+  const text=page.getByRole("textbox",{name:"Search key while holding text",exact:true});
+  await text.fill("Space");await text.press("Enter");await expect(entry).toContainText("Space");
+  await page.getByRole("button",{name:"Restore default Search key while holding",exact:true}).click();
+  await expect(entry).toContainText("`");
+  await page.getByRole("button",{name:"Save changes"}).click();
+  settings=await page.evaluate(async()=>(await import("/src/api.ts" as string)).call("get_settings"));
+  expect(settings.searchEntryKey).toBe("Backquote");
+});
+
+test("hint controls preview, save and apply the same styles to actual window hints", async ({page}) => {
+  await page.goto("/?preview=1");await page.getByRole("button",{name:"Appearance",exact:true}).click();
+  await page.getByLabel("Text color",{exact:true}).fill("#ffffff");
+  await page.getByLabel("Background color",{exact:true}).fill("#663399");
+  await page.getByLabel("Background opacity",{exact:true}).evaluate((el,value)=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value")!.set!.call(el,value);el.dispatchEvent(new Event("input",{bubbles:true}));},"60");
+  await page.getByLabel("Corner radius",{exact:true}).evaluate((el,value)=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value")!.set!.call(el,value);el.dispatchEvent(new Event("input",{bubbles:true}));},"15");
+  await page.getByLabel("Font size",{exact:true}).evaluate((el,value)=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value")!.set!.call(el,value);el.dispatchEvent(new Event("input",{bubbles:true}));},"36");
+  const badge=page.locator(".hint-style-preview kbd").first();
+  await expect(badge).toHaveCSS("color","rgb(255, 255, 255)");
+  await expect(badge).toHaveCSS("background-color","rgba(102, 51, 153, 0.6)");
+  await expect(badge).toHaveCSS("border-radius","15px");
+  await page.getByRole("button",{name:"Save changes"}).click();
+  const styles=await page.evaluate(async()=>{
+    const api=await import("/src/api.ts" as string);return (await api.call("get_settings")).hintStyle;
+  });
+  expect(styles.fontSize).toBe(36);expect(styles.opacity).toBe(60);
+  await page.route("**/src/api.ts",async route=>{
+    const response=await route.fetch();
+    await route.fulfill({response,body:(await response.text())+`\nconfig.hintStyle=${JSON.stringify(styles)};`});
+  });
+  await page.goto("/?preview=1&view=switcher");
+  await expect(page.locator(".window-hint").first()).toHaveCSS("background-color","rgba(102, 51, 153, 0.6)");
+  await expect(page.locator(".window-hint").first()).toHaveCSS("border-radius","15px");
+  await expect(page.locator(".window-hint").first()).toHaveCSS("font-size","36px");
+});
+
+test("updates distinguish no published release from latest and recover from network errors",async({page})=>{
+  await page.goto("/?preview=1");await page.getByRole("button",{name:"System & access",exact:true}).click();
+  await page.getByRole("button",{name:"Check for updates",exact:true}).click();
+  await expect(page.getByText("No public release is available yet, or the update source is private.", {exact:true})).toBeVisible();
+  await expect(page.getByText("You’re up to date.",{exact:true})).toHaveCount(0);
+});
+
+for (const failVerification of [false,true]) {
+  test(`signed updater ${failVerification ? "rejects a failed download before install" : "shows progress and keeps restart available after install"}`,async({page})=>{
+    await page.route("**/src/api.ts",async route=>{
+      const response=await route.fetch();
+      const extra=`
+const originalUpdateCall=call;
+call=async function(name,args={}) {
+ if(name==='get_release_status') {globalThis.__checks=(globalThis.__checks||0)+1;return {currentVersion:'0.1.0',published:true,version:'0.2.0',notes:'',newer:true,canInstall:true};}
+ if(name==='preview_update_check') return {version:'0.2.0',body:'New features',close:async()=>{},
+   download:async(callback)=>{callback({event:'Started',data:{contentLength:100}});callback({event:'Progress',data:{chunkLength:50}});await new Promise(resolve=>globalThis.__finishDownload=resolve);${failVerification ? "throw new Error('Signature verification failed');" : ""}},
+   install:async()=>{globalThis.__installed=true;}};
+ return originalUpdateCall(name,args);
+};`;
+      await route.fulfill({response,body:(await response.text())+extra});
+    });
+    await page.goto("/?preview=1");await page.getByRole("button",{name:"System & access",exact:true}).click();
+    await page.getByRole("button",{name:"Check for updates",exact:true}).click();
+    await page.getByRole("button",{name:"Download and install",exact:true}).click();
+    await expect(page.getByRole("progressbar")).toHaveAttribute("value","50");
+    await expect(page.getByRole("button",{name:"Check for updates",exact:true})).toBeDisabled();
+    await expect(page.getByRole("button",{name:"Restart BeaconHop",exact:true})).toBeDisabled();
+    // Changing settings tabs keeps the download alive.
+    await page.getByRole("button",{name:"Shortcuts",exact:true}).click();
+    await page.evaluate(()=>(window as any).__finishDownload());
+    await page.getByRole("button",{name:"System & access",exact:true}).click();
+    if(failVerification) {
+      await expect(page.getByText("Update failed. You can try again.",{exact:true})).toBeVisible();
+      expect(await page.evaluate(()=>(window as any).__installed)).toBeUndefined();
+      await expect(page.getByRole("button",{name:"Check for updates",exact:true})).toBeEnabled();
+    } else {
+      await expect(page.getByRole("button",{name:"Restart to update",exact:true})).toBeEnabled();
+      expect(await page.evaluate(()=>(window as any).__installed)).toBe(true);
+    }
+  });
+}
+
+test("failed update checks can retry and do not claim latest until a successful check",async({page})=>{
+  await page.route("**/src/api.ts",async route=>{
+    const response=await route.fetch();
+    const extra=`
+const originalRetryCall=call;
+let attempts=0;
+call=async function(name,args={}) {
+ if(name==='get_release_status') {
+   if(++attempts===1) throw new Error('Network unavailable');
+   return {currentVersion:'0.1.0',published:true,version:'0.1.0',notes:'',newer:false,canInstall:false};
+ }
+ return originalRetryCall(name,args);
+};`;
+    await route.fulfill({response,body:(await response.text())+extra});
+  });
+  await page.goto("/?preview=1");await page.getByRole("button",{name:"System & access",exact:true}).click();
+  const check=page.getByRole("button",{name:"Check for updates",exact:true});
+  await check.click();await expect(page.getByText("Update failed. You can try again.",{exact:true})).toBeVisible();
+  await expect(page.getByText("You’re up to date.",{exact:true})).toHaveCount(0);
+  await check.click();await expect(page.getByText("You’re up to date.",{exact:true})).toBeVisible();
+  await expect(page.getByText("Update failed. You can try again.",{exact:true})).toHaveCount(0);
 });

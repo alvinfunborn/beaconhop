@@ -25,6 +25,7 @@ struct Runtime {
     config_warning: Mutex<Option<String>>,
 }
 static RECORDING: AtomicBool = AtomicBool::new(false);
+static RECORD_SINGLE_KEY: AtomicBool = AtomicBool::new(false);
 static RECORDED_KEYS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 static RUNTIME: OnceLock<Arc<Runtime>> = OnceLock::new();
 fn rt() -> &'static Arc<Runtime> {
@@ -66,7 +67,12 @@ pub fn key(event: KeyEvent) -> bool {
         }
         pieces.push(&event.key);
         let shortcut = pieces.join("+");
-        if event.key == "Escape" || config::Shortcut::parse(&shortcut).is_ok() {
+        let valid = if RECORD_SINGLE_KEY.load(Ordering::Acquire) {
+            config::parse_search_entry_key(&shortcut).is_ok()
+        } else {
+            config::Shortcut::parse(&shortcut).is_ok()
+        };
+        if event.key == "Escape" || valid {
             RECORDING.store(false, Ordering::Release);
             let _ = rt.sender.send(Action::Record(if event.key == "Escape" {
                 String::new()
@@ -358,6 +364,7 @@ pub fn show_settings(app: &AppHandle) {
             let _ = w.emit("show-permissions", ());
         }
         let _ = w.show();
+        let _ = w.unminimize();
         let _ = w.set_focus();
         #[cfg(target_os = "macos")]
         platform::focus_settings(&w);
@@ -631,7 +638,8 @@ pub fn get_diagnostics() -> serde_json::Value {
 }
 
 #[tauri::command]
-pub fn record_shortcut(enabled: bool) -> bool {
+pub fn record_shortcut(enabled: bool, single_key: Option<bool>) -> bool {
+    RECORD_SINGLE_KEY.store(single_key.unwrap_or(false), Ordering::Release);
     RECORDING.store(enabled, Ordering::Release);
     crate::input::is_ready()
 }

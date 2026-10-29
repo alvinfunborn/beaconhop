@@ -1,6 +1,11 @@
+export type HintStyle = {
+  fontSize: number; fontWeight: number; color: string; background: string;
+  opacity: number; radius: number; borderColor: string; borderWidth: number; shadow: boolean;
+};
 export type Config = {
   holdShortcut: string;
   searchShortcut: string;
+  searchEntryKey: string;
   holdEnabled: boolean;
   desktopScope: "current" | "all";
   displayScope: "current" | "all";
@@ -8,6 +13,8 @@ export type Config = {
   includeHidden: boolean;
   hintAlphabet: string;
   thumbnails: boolean;
+  panelOpacity: number;
+  hintStyle: HintStyle;
   layout: "grid" | "list";
   theme: "system" | "dark" | "light";
   language: "system" | "zh" | "en";

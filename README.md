@@ -1,23 +1,23 @@
 <p align="center"><img src="public/beaconhop.svg" width="112" alt="BeaconHop logo" /></p>
 <h1 align="center">BeaconHop</h1>
-<p align="center">Follow the hint. Hop to your work.</p>
+<p align="center">Follow the hint. Make the hop.</p>
 
-BeaconHop is a window navigator for macOS and Windows, adapted from [Screen Buoy](https://github.com/alvinfunborn/screen-buoy). It brings open windows into view with stable letter hints, previews and title/application search.
+BeaconHop is a window navigator for macOS and Windows, adapted from [Screen Buoy](https://github.com/alvinfunborn/screen-buoy). It brings open windows into view with stable letter hints, previews and title/application search. Localized apps can also be found by their bundle ID or executable name: `Finder` finds 访达 on a Chinese Mac.
 
 ## Interaction
 
 - **Alt + Tab**: hold Alt to see windows. Tab / Shift + Tab cycle through recent windows. Release Alt to switch.
 - **Type a complete hint while holding**: immediately activate that exact window. Hints follow native window identity and stay stable through sorting, filtering and BeaconHop restarts. Closed/recreated windows receive a new allocation.
-- **Backslash (`\`)**: enter persistent search; you can release Alt.
-- **Cmd + ` on macOS / Win + ` on Windows**: open search directly. Both shortcut editors include recording, manual entry, restore-default actions and same-shortcut feedback. Win + backslash is also supported.
+- **Backquote (\`) while holding**: enter persistent search; you can release Alt. This key is configurable separately from the global shortcuts.
+- **Cmd + ` on macOS / Win + ` on Windows**: open search directly. All three key editors include recording, manual entry, restore-default actions and same-shortcut feedback. Win + backslash is also supported.
 - Search accepts Chinese text, full pinyin, initials, common polyphonic readings and mixed Chinese/Latin terms; Latin accents and full-width letters are normalized. For example, `weixin` / `wx` match 微信, and `chongqing` matches 重庆. Chinese IME composition confirms text before Enter can switch windows.
 - All four arrow keys navigate by the visible card positions in both hold and search modes. Tab / Shift + Tab retain recent-window order. Escape cancels. Click a card to switch. Minimized windows are restored.
 
-Both shortcuts are configurable. Desktop and display scopes are independent. Cross-desktop navigation follows a window to its existing desktop; it never moves the window.
+Both global shortcuts and the hold-to-search key are configurable. Desktop and display scopes are independent. Cross-desktop navigation follows a window to its existing desktop; it never moves the window.
 
 ## Status and systems
 
-The overview sizes itself to the window inventory, fits every matching window without scrolling, preserves preview aspect ratios, and keeps recent windows first even when filtering. A lightly translucent panel uses native macOS vibrancy / Windows Acrylic behind the content. Centered amber hint badges stay opaque and visible on bright and dark thumbnails. Search keeps the current panel size to avoid movement while typing.
+The overview sizes itself to the window inventory, fits every matching window without scrolling, preserves preview aspect ratios, and keeps recent windows first even when filtering. Settings and the switcher use native macOS vibrancy / Windows Acrylic behind a configurable tint. The opacity slider controls the tint; system Reduce Transparency may override native translucency. Centered hint badges support font size/weight, text and background colors, background opacity, corners, borders and shadows, with light/dark previews and reset. Search keeps the current panel size to avoid movement while typing.
 
 macOS captures previews in bounded parallel batches using one shareable-window query, decodes them before publishing a batch, and reuses an in-memory cache. It warms the initial inventory and refreshes the foreground window after focus changes. Settings includes a persistent restart button; save or discard edits before restarting.
 
@@ -65,8 +65,12 @@ The [branding guide](docs/branding.md) describes the window-stack logo and `npm 
 - `src-tauri/src/runtime.rs`: asynchronous inventory, presentation, activation, settings, and bounded preview cache.
 - `src/`: shared settings and switcher UI, English / 简体中文, dark / light themes.
 
-The product abstraction is **work navigation**. Browser tabs, saved work contexts, remote sessions, gaze input and cross-device navigation are future extensions, not implemented features of this window release.
+The product abstraction is **visual navigation**: quickly reaching the window or content you want. Browser tabs, saved sessions, remote sessions, gaze input and cross-device navigation are future extensions, not implemented features of this window release.
 
 ## License and attribution
 
 MIT. Original Screen Buoy copyright is preserved in [LICENSE](LICENSE). This fork began at Screen Buoy commit `045a5f0`; upstream remains read-only, with pushes disabled. The original working tree was not modified. BeaconHop branding, interaction engine, window adapters and interface are maintained independently.
+
+## Updates
+
+System settings includes manual update checks, signed downloads, progress, installation and restart. Network failures and unavailable/private release sources have separate messages and never claim the app is up to date. Updates preserve settings. See [update setup](docs/updates.md) for signing and publication configuration. No release is created by ordinary pushes or by the default package workflow.

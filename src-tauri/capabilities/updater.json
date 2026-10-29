@@ -1,0 +1,6 @@
+{
+  "identifier": "updater-capability",
+  "description": "Only settings may check and install signed updates",
+  "windows": ["main"],
+  "permissions": ["updater:default"]
+}

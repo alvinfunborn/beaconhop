@@ -90,7 +90,7 @@ impl Engine {
         self.mru.retain(|id| live.contains(id));
         self.search_index.retain(|id, _| live.contains(id));
         for w in &snapshot.windows {
-            let source = format!("{} {}", w.app_name, w.title);
+            let source = format!("{} {} {}", w.app_name, w.title, w.app_id);
             if self
                 .search_index
                 .get(&w.id)
@@ -260,7 +260,10 @@ impl Engine {
                     .map_or_else(
                         || {
                             score(
-                                &format!("{} {}", w.window.app_name, w.window.title),
+                                &format!(
+                                    "{} {} {}",
+                                    w.window.app_name, w.window.title, w.window.app_id
+                                ),
                                 &self.session.query,
                             )
                         },
@@ -375,7 +378,10 @@ impl Engine {
                     response.actions = self.cancel();
                     self.drain_modifiers = hold.modifiers;
                 }
-                "Backslash" => {
+                key if key
+                    == crate::config::parse_search_entry_key(&self.config.search_entry_key)
+                        .expect("validated configuration") =>
+                {
                     self.session.mode = Mode::Search;
                     self.session.prefix.clear();
                     self.session.revision += 1;
@@ -449,6 +455,30 @@ mod tests {
     use super::*;
     use crate::config::ALT;
     #[test]
+    fn localized_application_can_be_found_by_bundle_name_and_only_explicit_exclusions_apply() {
+        let mut e = engine(1);
+        let mut snapshot = e.snapshot.clone();
+        snapshot.windows[0].app_name = "访达".into();
+        snapshot.windows[0].app_id = "com.apple.finder".into();
+        snapshot.windows[0].title = "下载".into();
+        e.update(snapshot);
+        for query in ["Finder", "访达", "fangda", "fd", "下载", "xiazai"] {
+            e.open(Mode::Search, false);
+            e.search(query.into());
+            assert_eq!(e.results().len(), 1, "{query}");
+        }
+        let mut snapshot = e.snapshot.clone();
+        snapshot.windows[0].app_id = "com.example.files".into();
+        e.update(snapshot);
+        e.open(Mode::Search, false);
+        e.search("finder".into());
+        assert!(e.results().is_empty());
+        e.config.excluded_apps = vec!["com.example.files".into()];
+        e.open(Mode::Search, false);
+        e.search("访达".into());
+        assert!(e.results().is_empty());
+    }
+    #[test]
     fn exact_phrase_outranks_reused_word_fragments() {
         let query = "BeaconHop QA B";
         assert!(
@@ -496,13 +526,28 @@ mod tests {
         assert!(e.handle(key(&h, ALT, false)).consumed);
     }
     #[test]
-    fn backslash_search_survives_modifier_release() {
+    fn backquote_search_survives_modifier_release() {
         let mut e = engine(4);
         e.handle(key("Tab", ALT, true));
-        e.handle(key("Backslash", ALT, true));
+        assert!(e.handle(key("Backquote", ALT, true)).consumed);
         assert_eq!(e.session.mode, Mode::Search);
+        assert!(e.handle(key("Backquote", ALT, false)).consumed);
         assert!(e.handle(key("Alt", 0, false)).actions.is_empty());
         assert!(!e.handle(key("A", 0, true)).consumed);
+    }
+    #[test]
+    fn custom_search_entry_only_applies_while_holding() {
+        let mut e = engine(4);
+        e.config.search_entry_key = "Backslash".into();
+        assert!(!e.handle(key("Backslash", 0, true)).consumed);
+        assert_eq!(e.session.mode, Mode::Inactive);
+        e.handle(key("Tab", ALT, true));
+        e.handle(key("Backquote", ALT, true));
+        assert_eq!(e.session.mode, Mode::Held);
+        assert!(e.handle(key("Backslash", ALT, true)).consumed);
+        assert_eq!(e.session.mode, Mode::Search);
+        assert!(e.handle(key("Backslash", ALT, false)).consumed);
+        assert!(e.handle(key("Alt", 0, false)).actions.is_empty());
     }
     #[test]
     fn configured_backslash_search_leaves_plain_typing_alone() {

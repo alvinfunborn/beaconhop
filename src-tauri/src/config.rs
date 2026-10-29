@@ -11,6 +11,7 @@ pub const SHIFT: u8 = 8;
 pub struct Config {
     pub hold_shortcut: String,
     pub search_shortcut: String,
+    pub search_entry_key: String,
     pub hold_enabled: bool,
     pub desktop_scope: Scope,
     pub display_scope: Scope,
@@ -18,12 +19,62 @@ pub struct Config {
     pub include_hidden: bool,
     pub hint_alphabet: String,
     pub thumbnails: bool,
+    pub panel_opacity: u8,
+    pub hint_style: HintStyle,
     pub layout: String,
     pub theme: String,
     pub language: String,
     pub start_at_login: bool,
     pub start_in_tray: bool,
     pub excluded_apps: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct HintStyle {
+    pub font_size: u8,
+    pub font_weight: u16,
+    pub color: String,
+    pub background: String,
+    pub opacity: u8,
+    pub radius: u8,
+    pub border_color: String,
+    pub border_width: u8,
+    pub shadow: bool,
+}
+impl Default for HintStyle {
+    fn default() -> Self {
+        Self {
+            font_size: 28,
+            font_weight: 700,
+            color: "#19130a".into(),
+            background: "#ffcf48".into(),
+            opacity: 100,
+            radius: 8,
+            border_color: "#30220c".into(),
+            border_width: 2,
+            shadow: true,
+        }
+    }
+}
+impl HintStyle {
+    fn validate(&self) -> Result<(), String> {
+        let color = |s: &str| {
+            s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit())
+        };
+        if !(12..=48).contains(&self.font_size)
+            || ![500, 600, 700, 800].contains(&self.font_weight)
+            || self.opacity > 100
+            || self.radius > 24
+            || self.border_width > 6
+            || ![&self.color, &self.background, &self.border_color]
+                .iter()
+                .all(|s| color(s))
+        {
+            return Err("Invalid hint style: check size, colors, opacity and borders".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -39,6 +90,7 @@ impl Default for Config {
         Self {
             hold_shortcut: "Alt+Tab".into(),
             search_shortcut: "Super+Backquote".into(),
+            search_entry_key: "Backquote".into(),
             hold_enabled: true,
             desktop_scope: Scope::All,
             display_scope: Scope::All,
@@ -46,6 +98,8 @@ impl Default for Config {
             include_hidden: true,
             hint_alphabet: "ASDFGHJKLQWERTYUIOPZXCVBNM".into(),
             thumbnails: true,
+            panel_opacity: 24,
+            hint_style: HintStyle::default(),
             layout: "grid".into(),
             theme: "system".into(),
             language: "system".into(),
@@ -60,6 +114,17 @@ impl Default for Config {
 pub struct Shortcut {
     pub modifiers: u8,
     pub key: String,
+}
+pub fn parse_search_entry_key(value: &str) -> Result<String, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "backquote" | "`" => Ok("Backquote".into()),
+        "backslash" | "\\" => Ok("Backslash".into()),
+        "space" => Ok("Space".into()),
+        key if key.len() == 1 && key.as_bytes()[0].is_ascii_alphanumeric() => {
+            Ok(key.to_ascii_uppercase())
+        }
+        _ => Err("Use Backquote, Backslash, Space, a letter or a digit without modifiers".into()),
+    }
 }
 impl Shortcut {
     pub fn parse(value: &str) -> Result<Self, String> {
@@ -118,6 +183,10 @@ impl Shortcut {
 
 impl Config {
     pub fn validate(&self) -> Result<(), String> {
+        self.hint_style.validate()?;
+        if self.panel_opacity > 100 {
+            return Err("Panel opacity must be 0–100".into());
+        }
         let hold = Shortcut::parse(&self.hold_shortcut)?;
         let search = Shortcut::parse(&self.search_shortcut)?;
         if hold == search {
@@ -125,6 +194,12 @@ impl Config {
         }
         if hold.modifiers & SHIFT != 0 {
             return Err("Keep Shift free for reverse cycling in the hold shortcut".into());
+        }
+        let entry = parse_search_entry_key(&self.search_entry_key)?;
+        if entry == hold.key || (entry.len() == 1 && self.hint_alphabet.contains(&entry)) {
+            return Err(
+                "The search entry key must not conflict with hold cycling or hint letters".into(),
+            );
         }
         let letters: HashSet<_> = self.hint_alphabet.chars().collect();
         if !(4..=26).contains(&self.hint_alphabet.len())
@@ -175,6 +250,48 @@ pub fn save(path: &Path, config: &Config) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn old_settings_get_new_defaults_and_customizations_round_trip() {
+        let mut old = serde_json::to_value(Config::default()).unwrap();
+        let fields = old.as_object_mut().unwrap();
+        for key in ["searchEntryKey", "hintStyle", "panelOpacity"] {
+            fields.remove(key);
+        }
+        fields.insert("searchShortcut".into(), "Super+Backslash".into());
+        let mut restored: Config = serde_json::from_value(old).unwrap();
+        assert_eq!(restored.search_entry_key, "Backquote");
+        assert_eq!(restored.search_shortcut, "Super+Backslash");
+        assert_eq!(restored.hint_style, HintStyle::default());
+        restored.search_entry_key = "Backslash".into();
+        restored.hint_style.opacity = 65;
+        restored.hint_style.font_size = 36;
+        restored.panel_opacity = 10;
+        restored.validate().unwrap();
+        let saved: Config =
+            serde_json::from_slice(&serde_json::to_vec(&restored).unwrap()).unwrap();
+        assert_eq!(saved, restored);
+    }
+    #[test]
+    fn search_key_conflicts_and_invalid_styles_are_rejected() {
+        let mut config = Config::default();
+        for key in ["A", "Tab", "Alt+Backquote", "Escape", "ArrowUp"] {
+            config.search_entry_key = key.into();
+            assert!(config.validate().is_err());
+        }
+        config.search_entry_key = "1".into();
+        config.validate().unwrap();
+        config.hold_shortcut = "Alt+1".into();
+        assert!(config.validate().is_err());
+        config.hold_shortcut = "Alt+Tab".into();
+        config.hint_style.background = "url(https://example.com)".into();
+        assert!(config.validate().is_err());
+        config.hint_style = HintStyle::default();
+        config.hint_style.opacity = 101;
+        assert!(config.validate().is_err());
+        config.hint_style.opacity = 50;
+        config.panel_opacity = 101;
+        assert!(config.validate().is_err());
+    }
     #[test]
     fn shortcuts_are_unambiguous() {
         assert!(Config::default().validate().is_ok());

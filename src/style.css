@@ -957,7 +957,37 @@ textarea {
 .empty { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; }
 
 /* Native vibrancy/Acrylic supplies the desktop blur; tint only the panel surface. */
-.switcher { background: linear-gradient(145deg, #ffffff0b, transparent 48%), color-mix(in srgb, var(--bg) 78%, transparent); border-color: color-mix(in srgb, var(--text) 17%, transparent); backdrop-filter: blur(28px) saturate(125%); -webkit-backdrop-filter: blur(28px) saturate(125%); }
-.switcher .window-card { background: color-mix(in srgb, var(--card) 82%, transparent); }
-.switcher .preview-frame { background: color-mix(in srgb, var(--panel) 64%, transparent); }
+.switcher { background: linear-gradient(145deg, #ffffff0b, transparent 48%), color-mix(in srgb, var(--bg) var(--surface-opacity, 24%), transparent); border-color: color-mix(in srgb, var(--text) 17%, transparent); backdrop-filter: blur(28px) saturate(125%); -webkit-backdrop-filter: blur(28px) saturate(125%); }
+.switcher .window-card { background: color-mix(in srgb, var(--card) 38%, transparent); }
+.switcher .preview-frame { background: color-mix(in srgb, var(--panel) 28%, transparent); }
 @media (prefers-reduced-transparency: reduce) { .switcher { background: var(--bg); } }
+
+.app-updates { display: grid; gap: 14px; }
+.update-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.app-updates pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto; font: inherit; }
+.app-updates progress { width: 100%; accent-color: var(--accent); }
+.app-updates [role="status"] { display: grid; gap: 12px; }
+
+/* Keep native behind-window blur visible in both settings and the switcher. */
+.settings-shell { background: color-mix(in srgb, var(--bg) var(--surface-opacity, 24%), transparent); }
+.settings-shell aside { background: color-mix(in srgb, var(--panel) 28%, transparent); }
+.settings-footer { background: color-mix(in srgb, var(--panel) 32%, transparent); }
+.hint-badge, .window-card .hint-badge {
+  display: inline-block; padding: .2em .48em; min-width: 1.45em; line-height: 1.15;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: min(var(--hint-font-size), var(--hint-size, var(--hint-font-size)));
+  font-weight: var(--hint-weight); color: var(--hint-color);
+  background: var(--hint-background); border: var(--hint-border-width) solid var(--hint-border-color);
+  border-radius: var(--hint-radius); box-shadow: var(--hint-shadow); text-shadow: none;
+}
+.hint-style-preview { display: flex; gap: 12px; }
+.hint-sample { display: grid; place-items: center; height: 110px; flex: 1; border-radius: 10px; }
+.hint-sample.light { background: linear-gradient(130deg, #fff, #b5cae5); }
+.hint-sample.dark { background: linear-gradient(130deg, #222438, #070913); }
+.hint-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 28px; margin-top: 20px; }
+.hint-controls label { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 12px; }
+.hint-controls input[type=range] { width: 110px; min-width: 0; flex: 1; accent-color: var(--accent); }
+.hint-controls input[type=color] { width: 42px; height: 28px; padding: 2px; border: 1px solid var(--line); border-radius: 5px; background: transparent; }
+@media (prefers-reduced-transparency: reduce) {
+ .settings-shell, .settings-shell aside, .settings-footer, .switcher { background: var(--bg); }
+}

@@ -13,6 +13,7 @@ mod platform;
 mod runtime;
 mod search;
 mod stable_hints;
+mod updates;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -45,6 +46,7 @@ pub(crate) fn update_tray_language(app: &tauri::AppHandle, language: &str) {
 pub fn run() {
     let _ = logger::init_logger("info".into());
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             runtime::show_settings(app);
         }))
@@ -54,6 +56,8 @@ pub fn run() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
+            updates::get_release_status,
+            updates::open_releases_page,
             runtime::record_shortcut,
             runtime::restart_application,
             runtime::set_live_preview,
@@ -75,21 +79,23 @@ pub fn run() {
         ])
         .setup(|app| {
             runtime::init(app.handle().clone())?;
-            if let Some(panel) = app.get_webview_window("switcher") {
-                use tauri::window::{Effect, EffectsBuilder};
-                #[cfg(target_os = "macos")]
-                let effects = EffectsBuilder::new()
-                    .effect(Effect::HudWindow)
-                    .state(tauri::window::EffectState::Active)
-                    .radius(17.)
-                    .build();
-                #[cfg(target_os = "windows")]
-                let effects = EffectsBuilder::new()
-                    .effect(Effect::Acrylic)
-                    .color(tauri::window::Color(22, 23, 33, 150))
-                    .build();
-                if let Err(error) = panel.set_effects(effects) {
-                    log::warn!("Panel backdrop unavailable: {error}");
+            for label in ["main", "switcher"] {
+                if let Some(panel) = app.get_webview_window(label) {
+                    use tauri::window::{Effect, EffectsBuilder};
+                    #[cfg(target_os = "macos")]
+                    let effects = EffectsBuilder::new()
+                        .effect(Effect::Sidebar)
+                        .state(tauri::window::EffectState::Active)
+                        .radius(17.)
+                        .build();
+                    #[cfg(target_os = "windows")]
+                    let effects = EffectsBuilder::new()
+                        .effect(Effect::Acrylic)
+                        .color(tauri::window::Color(22, 23, 33, 70))
+                        .build();
+                    if let Err(error) = panel.set_effects(effects) {
+                        log::warn!("Panel backdrop unavailable: {error}");
+                    }
                 }
             }
             let [settings_label, restart_label, quit_label] =
@@ -138,9 +144,12 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("Could not start BeaconHop");
-    app.run(|_, event| {
-        if matches!(event, tauri::RunEvent::Exit) {
-            input::cleanup();
-        }
+    app.run(|_app, event| match event {
+        // Launch Services reopens the running macOS app without starting a
+        // second process, so the single-instance callback does not run.
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => runtime::show_settings(_app),
+        tauri::RunEvent::Exit => input::cleanup(),
+        _ => {}
     });
 }
