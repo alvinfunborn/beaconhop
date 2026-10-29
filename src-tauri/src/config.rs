@@ -18,6 +18,7 @@ pub struct Config {
     pub include_minimized: bool,
     pub include_hidden: bool,
     pub hint_alphabet: String,
+    pub screen_buoy: crate::hint_keys::ScreenBuoy,
     pub thumbnails: bool,
     pub panel_opacity: u8,
     pub hint_style: HintStyle,
@@ -102,6 +103,7 @@ impl Default for Config {
             include_minimized: true,
             include_hidden: true,
             hint_alphabet: "ASDFGHJKLQWERTYUIOPZXCVBNM".into(),
+            screen_buoy: Default::default(),
             thumbnails: true,
             panel_opacity: 24,
             hint_style: HintStyle::default(),
@@ -192,6 +194,7 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        self.screen_buoy.validate()?;
         self.hint_style.validate()?;
         if self.panel_opacity > 100 {
             return Err("Panel opacity must be 0–100".into());
@@ -312,7 +315,7 @@ mod tests {
     fn old_settings_get_new_defaults_and_customizations_round_trip() {
         let mut old = serde_json::to_value(Config::default()).unwrap();
         let fields = old.as_object_mut().unwrap();
-        for key in ["searchEntryKey", "hintStyle", "panelOpacity"] {
+        for key in ["searchEntryKey", "hintStyle", "panelOpacity", "screenBuoy"] {
             fields.remove(key);
         }
         fields.insert("searchShortcut".into(), "Super+Backslash".into());
@@ -324,6 +327,15 @@ mod tests {
         assert_eq!(restored.search_entry_key, "Backquote");
         assert_eq!(restored.search_shortcut, "Super+Backslash");
         assert_eq!(restored.hint_style, HintStyle::default());
+        assert!(!restored.screen_buoy.enabled);
+        restored.screen_buoy.enabled = true;
+        restored.screen_buoy.keys = vec!["HintLeftKey".into(), "Enter".into()];
+        restored
+            .screen_buoy
+            .neighbours
+            .get_mut("Space")
+            .unwrap()
+            .right = Some("ArrowRight".into());
         restored.search_entry_key = "Backslash".into();
         restored.hint_style.opacity = 65;
         restored.hint_style.font_size = 36;

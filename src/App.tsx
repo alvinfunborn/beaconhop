@@ -5,6 +5,7 @@ import { tileWindows, type Tile } from "./layout";
 import { usePreviews } from "./previews";
 import { Updates } from "./Updates";
 import { HintCharacters } from "./HintCharacters";
+import { ScreenBuoyIntegration } from "./ScreenBuoyIntegration";
 import { HintAppearance } from "./HintAppearance";
 import { hintVariables } from "./hints";
 const isMac = navigator.platform.toLowerCase().includes("mac");
@@ -131,6 +132,10 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
     const off = subscribe("show-permissions", () => { if (!disposed) setTab("system"); });
     return () => { disposed = true; void off.then((f) => f()); };
   }, []);
+  useEffect(() => {
+    const off = subscribe<string>("screen-buoy-error", (message) => { setTab("screen-buoy"); setError(message); });
+    return () => { void off.then(f => f()); };
+  }, []);
   const needsAccess = permissions?.required && !permissions.ready;
   const needsPreviews = permissions?.required && draft.thumbnails && !permissions.screenRecording;
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
@@ -244,6 +249,7 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
     ["general", "⌘", t("Shortcuts", "快捷键")],
     ["scope", "▤", t("Window scope", "窗口范围")],
     ["appearance", "◐", t("Appearance", "外观")],
+    ["screen-buoy", "↗", "Screen Buoy"],
     ["system", "⚙", t("System & access", "系统与权限")],
     ["about", "◎", t("About", "关于")],
   ];
@@ -387,6 +393,7 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
               <HintCharacters value={draft} onChange={patch => { setDraft(old => ({...old, ...patch})); setNotice(""); setError(""); }} t={t} />
             </>
           )}
+          {tab === "screen-buoy" && <ScreenBuoyIntegration value={draft.screenBuoy} alphabet={draft.hintAlphabet} onChange={v => change("screenBuoy", v)} t={t} />}
           {tab === "scope" && (
             <>
               <p className="intro">

@@ -3,6 +3,7 @@ export type HintStyle = {
   opacity: number; radius: number; borderColor: string; borderWidth: number; shadow: boolean;
 };
 export type Config = {
+  screenBuoy: ScreenBuoyConfig;
   holdShortcut: string;
   searchShortcut: string;
   searchEntryKey: string;
@@ -21,6 +22,12 @@ export type Config = {
   startAtLogin: boolean;
   startInTray: boolean;
   excludedApps: string[];
+};
+export type ScreenBuoyConfig = {
+  enabled: boolean;
+  applicationPath: string;
+  keys: string[];
+  neighbours: Record<string, { left: string | null; right: string | null }>;
 };
 export type Destination = {
   id: string;

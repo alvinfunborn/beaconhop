@@ -307,6 +307,47 @@ fn perform(action: Action) {
             show(search);
         }
         Action::Search => show(true),
+        Action::ScreenBuoy(session_id, target, held_keys) => {
+            std::thread::spawn(move || {
+                let current = || {
+                    let e = rt().engine.lock().unwrap();
+                    let valid = e.sb_pending
+                        && e.config.screen_buoy.enabled
+                        && e.session.session_id == session_id
+                        && e.session.mode == Mode::Inactive
+                        && e.snapshot
+                            .windows
+                            .iter()
+                            .any(|w| w.id == target.id && w.pid == target.pid);
+                    drop(e);
+                    valid && platform::focused_id().as_ref() == Some(&target.id)
+                };
+                if !current() {
+                    return;
+                }
+                let config = rt().engine.lock().unwrap().config.screen_buoy.clone();
+                let result = rt()
+                    .app
+                    .path()
+                    .home_dir()
+                    .map_err(|e| e.to_string())
+                    .and_then(|home| crate::screen_buoy::application_path(&config, &home))
+                    .and_then(|path| {
+                        crate::screen_buoy::handoff(&path, &target, &held_keys, &current)
+                    });
+                if let Err(error) = result {
+                    if current() {
+                        log::warn!("Screen Buoy handoff failed: {error}");
+                        show_settings(&rt().app);
+                        let _ = rt().app.emit("screen-buoy-error", error);
+                    }
+                }
+                let mut e = rt().engine.lock().unwrap();
+                if e.session.session_id == session_id {
+                    e.sb_pending = false;
+                }
+            });
+        }
         Action::Activate(session_id, target) => {
             if rt().engine.lock().unwrap().session.session_id != session_id {
                 return;
@@ -450,6 +491,7 @@ pub fn save_settings(config: Config) -> Result<Config, String> {
         dispatch(actions);
     }
     e.config = config.clone();
+    e.clear_extension();
     *rt().config_warning.lock().unwrap() = None;
     drop(e);
     crate::update_tray_language(&rt().app, &config.language);

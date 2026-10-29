@@ -4,7 +4,7 @@ async function permissionsFixture(page: Page, keyboardHook: boolean) {
   await page.route("**/src/api.ts", async (route) => {
     const response = await route.fetch();
     let body = (await response.text())
-      .replace(/inputMonitoring:\s*true/, "inputMonitoring: false")
+      .replace(/inputMonitoring:\s*true/g, "inputMonitoring: false")
       .replace(/screenRecording:\s*true/, "screenRecording: false");
     if (!keyboardHook) {
       body = body.replace(/keyboardHook:\s*true/, "keyboardHook: false")

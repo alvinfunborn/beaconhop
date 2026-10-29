@@ -1,12 +1,14 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Config, Session, Permissions } from "./types";
+import { defaultScreenBuoy } from "./hintKeys";
 export const native = isTauri();
 export const preview =
   !native &&
   import.meta.env.DEV &&
   new URLSearchParams(location.search).has("preview");
 export const defaults: Config = {
+  screenBuoy: defaultScreenBuoy(),
   holdShortcut: navigator.platform.toLowerCase().includes("win") ? "Super+Tab" : "Alt+Tab",
   searchShortcut: "Super+Backquote",
   searchEntryKey: "Backquote",
@@ -75,6 +77,18 @@ export async function call<T>(
   if (!preview) throw new Error("Open BeaconHop as a desktop application.");
   let value: any;
   switch (name) {
+    case "get_screen_buoy_status": {
+      const fixture = new URLSearchParams(location.search).get("sb");
+      value = { installed: fixture === "ready" || fixture === "permissions" || fixture === "old", compatible: fixture === "ready" || fixture === "permissions", path: fixture ? "/Applications/ScreenBuoy.app/Contents/MacOS/screen-buoy" : "", platform: "macos" };
+      break;
+    }
+    case "connect_screen_buoy":
+      value = { version: "1.4.3-dev", protocol: 2, permissions: { required: true, accessibility: !location.search.includes("sb=permissions"), inputMonitoring: true, keyboardHook: !location.search.includes("sb=permissions"), ready: !location.search.includes("sb=permissions"), appPath: "/Applications/ScreenBuoy.app" } };
+      break;
+    case "get_screen_buoy_download":
+      value = { version: "v1.4.3", compatible: false };
+      break;
+    case "open_screen_buoy_download": break;
     case "get_release_status":
       value = { currentVersion: __APP_VERSION__, published: false, version: "", notes: "", newer: false, canInstall: false };
       break;

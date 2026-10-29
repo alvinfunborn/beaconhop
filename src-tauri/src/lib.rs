@@ -1,5 +1,6 @@
 mod config;
 mod engine;
+mod hint_keys;
 mod input;
 mod logger;
 #[cfg(target_os = "macos")]
@@ -9,6 +10,7 @@ mod navigation;
 mod panel;
 mod platform;
 mod runtime;
+mod screen_buoy;
 mod search;
 mod stable_hints;
 mod updates;
@@ -54,6 +56,10 @@ pub fn run() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
+            screen_buoy::get_screen_buoy_status,
+            screen_buoy::connect_screen_buoy,
+            screen_buoy::get_screen_buoy_download,
+            screen_buoy::open_screen_buoy_download,
             updates::get_release_status,
             updates::open_releases_page,
             runtime::record_shortcut,

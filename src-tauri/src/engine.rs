@@ -20,6 +20,7 @@ pub enum Action {
     Show,
     Search,
     Activate(u64, Destination),
+    ScreenBuoy(u64, Destination, Vec<u32>),
     Cancel(u64, Option<Destination>),
 }
 #[derive(Default)]
@@ -27,20 +28,33 @@ pub struct Response {
     pub consumed: bool,
     pub actions: Vec<Action>,
 }
+struct HintExtension {
+    target: Destination,
+    key: String,
+    code: u32,
+    requested: bool,
+}
 pub struct Engine {
     pub config: Config,
     pub snapshot: Snapshot,
     pub session: Session,
     pub mru: Vec<String>,
     consumed: HashSet<u32>,
+    pressed_keys: HashSet<u32>,
     drain_modifiers: u8,
     serial: u64,
     pending_focus: Option<(u64, String)>,
+    hint_extension: Option<HintExtension>,
+    pub sb_pending: bool,
     search_index: HashMap<String, crate::search::SearchText>,
     pub hints: crate::stable_hints::StableHints,
     pub navigation: HashMap<String, Bounds>,
 }
 impl Engine {
+    pub fn clear_extension(&mut self) {
+        self.hint_extension = None;
+        self.sb_pending = false;
+    }
     pub fn new(config: Config) -> Self {
         Self {
             config,
@@ -48,9 +62,12 @@ impl Engine {
             session: Session::default(),
             mru: vec![],
             consumed: HashSet::new(),
+            pressed_keys: HashSet::new(),
             drain_modifiers: 0,
             serial: 0,
             pending_focus: None,
+            hint_extension: None,
+            sb_pending: false,
             search_index: HashMap::new(),
             hints: Default::default(),
             navigation: HashMap::new(),
@@ -73,6 +90,15 @@ impl Engine {
         self.snapshot.focused_id = id;
     }
     pub fn finish_activation(&mut self, session_id: u64, focused: Option<String>) {
+        if self.session.session_id == session_id
+            && self
+                .hint_extension
+                .as_ref()
+                .is_some_and(|h| focused.as_ref() != Some(&h.target.id))
+        {
+            self.hint_extension = None;
+            self.sb_pending = false;
+        }
         if self
             .pending_focus
             .as_ref()
@@ -111,6 +137,8 @@ impl Engine {
         self.snapshot = snapshot;
     }
     pub fn open(&mut self, mode: Mode, reverse: bool) -> Vec<Action> {
+        self.hint_extension = None;
+        self.sb_pending = false;
         self.serial += 1;
         let origin = self
             .pending_focus
@@ -316,6 +344,8 @@ impl Engine {
         vec![Action::Activate(self.session.session_id, target)]
     }
     pub fn cancel(&mut self) -> Vec<Action> {
+        self.hint_extension = None;
+        self.sb_pending = false;
         let origin = self.session.origin.clone();
         self.pending_focus = None;
         self.session.mode = Mode::Inactive;
@@ -324,12 +354,76 @@ impl Engine {
     }
     pub fn handle(&mut self, event: KeyEvent) -> Response {
         let mut response = Response::default();
+        if event.down {
+            self.pressed_keys.insert(event.code);
+            // Auto-repeat from the originating gesture must not cancel a cold handoff.
+            if !event.repeat || !self.consumed.contains(&event.code) {
+                self.sb_pending = false;
+            }
+        } else {
+            self.pressed_keys.remove(&event.code);
+        }
         if !event.down && self.consumed.remove(&event.code) {
             response.consumed = true;
+        }
+        if event.down
+            && event.repeat
+            && self.session.mode == Mode::Inactive
+            && self.consumed.contains(&event.code)
+        {
+            response.consumed = true;
+            return response;
         }
         let hold = Shortcut::parse(&self.config.hold_shortcut).expect("validated configuration");
         let search =
             Shortcut::parse(&self.config.search_shortcut).expect("validated configuration");
+        if !self.config.screen_buoy.enabled {
+            self.hint_extension = None;
+        }
+        if let Some(extension) = &mut self.hint_extension {
+            if event.key == "Escape" && event.down {
+                self.hint_extension = None;
+                self.consumed.insert(event.code);
+                response.consumed = true;
+                return response;
+            }
+            if !extension.requested {
+                if !event.down && event.code == extension.code {
+                    self.hint_extension = None;
+                } else if event.down
+                    && !event.repeat
+                    && self.config.screen_buoy.matches(&extension.key, &event.key)
+                {
+                    extension.requested = true;
+                } else if event.down
+                    && !event.repeat
+                    && event.code != extension.code
+                    && !matches!(event.key.as_str(), "Alt" | "Control" | "Super" | "Shift")
+                {
+                    self.hint_extension = None;
+                }
+            } else if event.down && !event.repeat && !self.consumed.contains(&event.code) {
+                self.hint_extension = None;
+            }
+            if self.hint_extension.as_ref().is_some_and(|h| h.requested) {
+                if !matches!(event.key.as_str(), "Alt" | "Control" | "Super" | "Shift") {
+                    response.consumed = true;
+                    if event.down {
+                        self.consumed.insert(event.code);
+                    }
+                }
+                // SB starts on keydown and drains the originating physical keys.
+                let target = self.hint_extension.take().unwrap().target;
+                self.drain_modifiers = 0;
+                self.sb_pending = true;
+                response.actions.push(Action::ScreenBuoy(
+                    self.session.session_id,
+                    target,
+                    self.pressed_keys.iter().copied().collect(),
+                ));
+                return response;
+            }
+        }
         if self.drain_modifiers != 0 {
             if event.modifiers & self.drain_modifiers == 0 {
                 self.drain_modifiers = 0;
@@ -428,6 +522,17 @@ impl Engine {
                         if let Some(id) = exact {
                             response.actions = self.activate(Some(&id));
                             self.drain_modifiers = hold.modifiers;
+                            if self.config.screen_buoy.enabled {
+                                if let Some(Action::Activate(_, target)) = response.actions.first()
+                                {
+                                    self.hint_extension = Some(HintExtension {
+                                        target: target.clone(),
+                                        key: event.key.clone(),
+                                        code: event.code,
+                                        requested: false,
+                                    });
+                                }
+                            }
                         } else {
                             self.session.selected =
                                 self.results().first().map(|w| w.window.id.clone());
@@ -528,6 +633,140 @@ mod tests {
         assert!(matches!(&r.actions[0],Action::Activate(_, w) if w.id=="3"));
         assert_eq!(e.session.mode, Mode::Inactive);
         assert!(e.handle(key(&h, ALT, false)).consumed);
+    }
+    fn extension_engine(binding: &str) -> (Engine, String) {
+        let mut e = engine(5);
+        e.config.screen_buoy.enabled = true;
+        e.config.screen_buoy.keys = vec![binding.into()];
+        e.handle(key("Tab", ALT, true));
+        e.handle(key("Tab", ALT, false));
+        let hint = e.session.windows[3].hint.clone();
+        let response = e.handle(key(&hint, ALT, true));
+        assert!(matches!(&response.actions[..], [Action::Activate(_, target)] if target.id == "3"));
+        assert_eq!(e.session.mode, Mode::Inactive);
+        (e, hint)
+    }
+    #[test]
+    fn extensions_start_on_keydown_and_isolate_the_held_gesture() {
+        for binding in ["HintLeftKey", "HintRightKey", "Enter", "Tab"] {
+            for modifier_first in [false, true] {
+                let (mut e, hint) = extension_engine(binding);
+                let side = &e.config.screen_buoy.neighbours[&hint];
+                let trigger = match binding {
+                    "HintLeftKey" => side.left.clone().unwrap(),
+                    "HintRightKey" => side.right.clone().unwrap(),
+                    _ => binding.into(),
+                };
+                // Record an actually-held modifier as native hooks do.
+                e.handle(key("Alt", ALT, true));
+                if modifier_first {
+                    e.handle(key("Alt", 0, false));
+                }
+                let mods = if modifier_first { 0 } else { ALT };
+                let response = e.handle(key(&trigger, mods, true));
+                assert!(response.consumed);
+                let [Action::ScreenBuoy(_, target, held)] = &response.actions[..] else {
+                    panic!("{binding} must hand off on keydown, before any release");
+                };
+                assert_eq!(target.id, "3");
+                assert!(held.contains(&key(&hint, mods, true).code));
+                assert!(held.contains(&key(&trigger, mods, true).code));
+                assert_eq!(held.contains(&key("Alt", ALT, true).code), !modifier_first);
+                assert!(e.sb_pending);
+                for k in [&hint, &trigger] {
+                    let mut repeat = key(k, mods, true);
+                    repeat.repeat = true;
+                    let r = e.handle(repeat);
+                    assert!(r.consumed && r.actions.is_empty());
+                    assert!(e.sb_pending, "origin repeat must not cancel a cold launch");
+                }
+                for k in [&trigger, &hint] {
+                    let r = e.handle(key(k, mods, false));
+                    assert!(r.consumed && r.actions.is_empty());
+                }
+                assert!(e.handle(key("Alt", 0, false)).actions.is_empty());
+                assert!(e.sb_pending);
+                e.handle(key("Escape", 0, true));
+                assert!(!e.sb_pending);
+            }
+        }
+    }
+    #[test]
+    fn ordinary_release_escape_unrelated_input_and_failed_focus_never_open_sb() {
+        for cancel in [
+            "release",
+            "Escape",
+            "unrelated",
+            "failed",
+            "open",
+            "disable",
+        ] {
+            let (mut e, hint) = extension_engine("Enter");
+            match cancel {
+                "release" => {
+                    e.handle(key(&hint, ALT, false));
+                }
+                "Escape" => {
+                    e.handle(key("Escape", ALT, true));
+                    e.handle(key("Escape", ALT, false));
+                }
+                "unrelated" => {
+                    e.handle(key("1", ALT, true));
+                    e.handle(key("1", ALT, false));
+                }
+                "failed" => e.finish_activation(e.session.session_id, Some("0".into())),
+                "open" => {
+                    e.open(Mode::Search, false);
+                }
+                _ => e.config.screen_buoy.enabled = false,
+            }
+            for event in [
+                key("Enter", ALT, true),
+                key("Enter", ALT, false),
+                key(&hint, ALT, false),
+                key("Alt", 0, false),
+            ] {
+                assert!(
+                    !e.handle(event)
+                        .actions
+                        .iter()
+                        .any(|a| matches!(a, Action::ScreenBuoy(..))),
+                    "{cancel}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn requested_extension_is_cancelled_by_unrelated_input() {
+        let (mut e, hint) = extension_engine("Enter");
+        e.handle(key("Enter", ALT, true));
+        e.handle(key("1", ALT, true));
+        for event in [
+            key("1", ALT, false),
+            key("Enter", ALT, false),
+            key(&hint, ALT, false),
+            key("Alt", 0, false),
+        ] {
+            assert!(e.handle(event).actions.is_empty());
+        }
+        assert!(!e.sb_pending);
+    }
+    #[test]
+    fn holding_final_hint_after_modifier_release_does_not_type_repeats_into_target() {
+        let (mut e, hint) = extension_engine("Enter");
+        e.handle(key("Alt", 0, false));
+        let mut repeat = key(&hint, 0, true);
+        repeat.repeat = true;
+        let response = e.handle(repeat);
+        assert!(response.consumed && response.actions.is_empty());
+        let response = e.handle(key("Enter", 0, true));
+        assert!(response.consumed);
+        assert!(matches!(
+            response.actions.as_slice(),
+            [Action::ScreenBuoy(..)]
+        ));
+        assert!(e.handle(key("Enter", 0, false)).consumed);
+        assert!(e.handle(key(&hint, 0, false)).actions.is_empty());
     }
     #[test]
     fn punctuation_shifted_symbols_and_spaces_activate_short_hints() {

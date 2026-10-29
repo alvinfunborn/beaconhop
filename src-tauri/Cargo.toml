@@ -26,6 +26,7 @@ unicode-normalization = "0.1"
 tauri-plugin-updater = "=2.8.1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 semver = "1"
+uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.61", features = [
