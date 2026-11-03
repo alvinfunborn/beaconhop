@@ -1,5 +1,30 @@
 use crate::model::{Bounds, Destination};
 
+// Text inventories keep a readable single column and scroll at the display edge.
+// Preview dimensions belong to the native parent and must not size text rows.
+pub fn text_size(windows: &[Destination], available: &Bounds, extra: f64) -> (f64, f64) {
+    let max_w = (available.width - 64.).max(1.);
+    let max_h = (available.height - 96.).max(1.);
+    let rows: f64 = windows
+        .iter()
+        .map(|w| {
+            if w.content
+                .as_ref()
+                .is_some_and(|c| !c.description.is_empty())
+            {
+                88.
+            } else {
+                72.
+            }
+        })
+        .sum();
+    let content = rows + windows.len().saturating_sub(1) as f64 * 8.;
+    (
+        760_f64.min(max_w),
+        (148. + extra + 28. + content).max(300.).min(max_h),
+    )
+}
+
 // Size from a preferred thumbnail height, then shrink only to fit the display.
 // Search keeps the session's size while filtering, so typing never moves the panel.
 pub fn size(windows: &[Destination], available: &Bounds, compact: bool, extra: f64) -> (f64, f64) {
@@ -95,6 +120,29 @@ pub fn around_hint(rect: &Bounds, hint: Option<&Bounds>) -> Vec<Bounds> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn text_inventory_stays_single_column_and_does_not_shrink_large_lists() {
+        let display = Bounds {
+            width: 1440.,
+            height: 900.,
+            ..Default::default()
+        };
+        let windows = vec![Destination::default(); 100];
+        let few = text_size(&windows[..2], &display, 0.);
+        let many = text_size(&windows, &display, 0.);
+        assert_eq!(few, (760., 328.));
+        assert_eq!(many, (760., 804.));
+        let tiny = text_size(
+            &windows,
+            &Bounds {
+                width: 400.,
+                height: 500.,
+                ..Default::default()
+            },
+            72.,
+        );
+        assert!(tiny.0 <= 336. && tiny.1 <= 404.);
+    }
     #[test]
     fn native_preview_leaves_the_hint_visible_without_distorting_the_remaining_image() {
         let rect = Bounds {

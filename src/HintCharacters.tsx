@@ -8,7 +8,7 @@ type Props = {
 const upper = (value: string) => value.replace(/[a-z]/g, c => c.toUpperCase());
 
 export function HintCharacters({ value, onChange, t }: Props) {
-  return <section className="hint-characters">
+  return <section className="hint-characters" id="hint-characters" tabIndex={-1}>
     <h2>{t("Hint characters", "提示字符集")}</h2>
     <p className="muted">{t("Single-character hints first; automatically use two characters when needed. Never more than two.", "优先单字符，不够时自动使用双字符，最多两位。")}</p>
     <label className="charset-row"><span>{t("Characters in priority order", "字符优先顺序")}</span>

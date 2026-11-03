@@ -1,6 +1,74 @@
 # BeaconHop validation ledger
 
-Updated: 2026-10-29. Source implementation, packaged builds and native acceptance are separate. Dated entries describe their respective build, not necessarily the current executable.
+Updated: 2026-11-02. Source implementation, packaged builds and native acceptance are separate. Dated entries describe their respective build, not necessarily the current executable.
+
+## 2026-11-02 browser bridge resets, website icons and hint spacing
+
+The installed browser host reproduced `Connection reset by peer` when a real authenticated client waited 50 or 200 ms between connecting and sending its request; immediate sending succeeded. Its nonblocking listener produced nonblocking accepted streams on macOS. The host now explicitly makes each accepted stream blocking before applying bounded read/write timeouts, allowing delayed and fragmented requests.
+
+The browser extension now reads small PNG favicons from Chromium's local `_favicon` resource with the `favicon` permission, caches them in its worker and includes them for the focused window. The core accepts bounded inline PNGs, drops remote/oversized icons and no longer substitutes the Edge application icon for browser tabs. Missing images use the page-title initial. Content rows reserve a separate hint column sized for the configured font, avoiding overlap with the site icon. Tab screenshots remain unimplemented; they require a separate capture/cache lifecycle for previously viewed pages.
+
+Validation: 91 Rust tests and five navigation UI tests passed. The UI regression and inspected screenshot cover two-character hints at 36 px on a 760 px window. The packaged native-host executable passed the browser-adapter protocol test, including 100 ms delayed and fragmented list/activation requests, favicon transfer, moved/closed target rejection, authentication and host cleanup. The frontend and optimized macOS build passed.
+
+The updated app was installed with its existing signing requirement and unchanged BH/SB settings; installed executable SHA-256 is `5e663d8cd2c9ca20fb5bc5cf559657ad2cd237c00d36f8befcad6c528ca5769a`. The existing Edge extension was reloaded through its own management card. Independent real Edge checks then passed at 0/50/200 ms delays with fragmented messages, returning three browser windows and 22 website icons for 23 tabs in the focused window (seven distinct images). A delayed activation request for a nonexistent tab returned the browser's explicit rejection instead of resetting the socket. The two temporary extension-management windows were closed and independently confirmed absent. SB remained running. No physical Ctrl+Tab gesture or successful real-tab switch was replayed in this round. Build resources were released. Evidence, scoped source diffs, layout screenshot and installation backups are under ignored `logs/browser-repair-20261102/`.
+
+## 2026-11-02 desktop shortcut returns to the previous desktop
+
+The desktop shortcut previously selected the next desktop in inventory order, so desktop 1 → 2 followed by another invocation selected desktop 3 rather than returning to desktop 1. The engine now keeps desktop recency separately from window recency, updating it on confirmed current-desktop transitions, including switches outside BeaconHop. Forward invocation prefers the most recently visited noncurrent desktop; with no history it retains the next-desktop fallback. Overview positions and hints remain stable, and further Tab/Shift+Tab navigation and reverse invocation follow overview order. Shared-Space current-desktop lookup also recognizes participating displays rather than only the activation anchor.
+
+Validation: 91 Rust tests passed, one ignored. Regressions exercise repeated 1 ↔ 2 shortcut press/release sequences, unchanged hints and card order, repeated inventory polls, external desktop changes, failed requests, removed desktops, reverse/further navigation and an external display sharing the current Space. Frontend and optimized macOS app builds passed; formatting and whitespace checks passed.
+
+BeaconHop was installed and restarted at 14:23 with the existing signing requirement and byte-identical BH/SB settings. Independent readback verified the installed executable SHA-256 `5af77e573bda7026a65a80e477c4521ff9800e6ba6a6b5eb82ce02cb02fe6acd`, strict bundle signature, tested source hashes, Accessibility grant and installed event tap. Screen Buoy was not replaced or restarted. History starts with observations made by the new process; it is not persisted across restarts. No synthetic input or Space switching was performed, so physical-key desktop round-trip acceptance remains pending. The build lease was released; evidence and backups are under ignored `logs/desktop-mru-20261102/`.
+
+## 2026-11-02 shared-desktop hints across displays
+
+The desktop continuation previously validated a shared macOS Space correctly but returned only its activation-anchor display's bounds. Screen Buoy consequently filtered out the other display's grids and controls. A native `Main` managed-display group now includes every active display after validating the requested Space and anchor; UUID groups retain their individual display scope. Geometry is sorted before session comparisons so enumeration-order changes do not dismiss an otherwise unchanged session.
+
+Validation: 101 SB Rust tests passed, two ignored. New regressions cover shared versus separate display scopes, negative coordinates, stable geometry ordering, disconnected anchors, and cached controls on both displays while excluding the gap. The existing grid test covers distinct overlay indices and shared hint allocation. A separate read-only native test passed against the current shared Space, returning both actual display bounds: `(-385,-1440,2560,1440)` and `(0,0,1800,1169)`. It did not switch Spaces or inject input.
+
+The frontend and optimized macOS build passed. Screen Buoy was installed at 11:40 with its existing signing requirement and byte-identical BH/SB settings; BH was not replaced or restarted. Independent signature/hash verification passed for SB executable SHA-256 `6cf91383d763e4ba122018f9504a11345445d861bac2eb6fdf77acde7a3f8d3f`. Protocol-3 status confirmed Accessibility, Input Monitoring and keyboard hook ready.
+
+The controlled desktop-handoff request succeeded, but its initial AX read exposed no WebView descendants, so that attempt did not establish rendered hint counts or uniqueness. Its own test process was stopped and SB relaunched with readiness verified. Subsequent read-only WindowServer captures of the installed app showed both layer-25 overlays at the two expected display frames; both transparent-window screenshots were visually checked and contained grid and control hints. The entry gesture of that later user-active session was not captured, so these screenshots establish dual-display rendering separately from the native desktop-scope test, not a full replay of Ctrl+Win+Tab → held hint → right neighbour. No synthetic input was sent and no Windows runtime test was performed. Build resources and probe processes were released; the user's running apps and active hint session were retained. Evidence is under ignored `logs/desktop-displays-20261102/`, including `native-scope.log`, `visible-overlays.json`, `visible-overlay-{0,1}.png`, `verification.json` and `probe-cleanup.json`.
+
+## 2026-11-02 desktop selection and Screen Buoy focus checks
+
+Held shortcuts now commit on release of all their configured modifiers. This Mac's Karabiner Ctrl-to-Command mappings accept additional modifiers: a temporary Ctrl release before a mapped hint could previously commit the highlighted desktop before that hint arrived. Regression tests reproduce that event sequence and verify the exact selected desktop is activated once with either modifier-release order. Activation logs now include the session, target and desktop IDs.
+
+Screen Buoy now resolves the target application by PID and verifies its `AXFrontmost` and exact `AXFocusedWindow` ID. Its previous system-wide `AXFocusedApplication` query returned `AXErrorNoValue` on this Mac while the actual foreground application's window remained available. A read-only native comparison of the old and new Rust functions against the same foreground Lark window returned `old=false`, `new=true`; wrong-window and wrong-PID checks both returned false. This isolates the focus-query defect without claiming the reported VS Code sequence has been replayed. The installed BH log also contained two failed SB focus validations at 10:30 on November 2.
+
+While a Screen Buoy request is pending, a fresh nonmodifier key cancels the request and is consumed, including its repeats and release, rather than reaching the selected application's editor. The regression asserts this behavior. Validation: BH 88 Rust tests passed, one ignored; SB 98 passed, two ignored; BH Rust formatting and both repositories' whitespace checks passed. Both frontend and optimized macOS app builds passed.
+
+Both apps were installed and restarted at 11:02 with their existing signing requirements and byte-identical user configurations. Independent readback verified both installed executable hashes and strict bundle signatures. BH's new process logged Accessibility granted and its event tap installed; SB's protocol-3 status reported Accessibility, Input Monitoring and keyboard hook ready. Foreground remained on the user's existing application during installation. Installed executable SHA-256: BH `19891652dcd9bd59fe8a6fcfc968f7ad9f02a7b1617bac70a48ba4f3583e9531`; SB `9c31f23f9cbedb8916b2362c4ff0b6664640e68e72a3184f1aaa20213a16933a`.
+
+Physical-key acceptance of the reported desktop choice and held-hint continuation into VS Code remains pending; no synthetic input or focus switching was performed in this run. No Windows runtime acceptance is claimed. Evidence, installation receipts, app/config backups and scoped before/after source copies are under ignored `logs/focus-fix-20261102/`.
+
+## 2026-10-30 shared-desktop previews and local browser setup
+
+Shared macOS Spaces now expose all participating display IDs for desktop previews while retaining their native activation anchor. The two-display regression checks both display membership and external-screen windows, then checks the separate-display case. Final Rust verification: 86 passed, 1 ignored; navigation UI: 4 passed; frontend and optimized macOS app builds passed. A read-only native probe confirmed two physical displays, four shared Spaces and both display IDs on every Space.
+
+The local Edge profile had neither the browser extension nor its Native Messaging registration. Both are now installed; an authenticated request through the real Edge extension/native host successfully listed its normal-window contexts. An Edge-specific Karabiner rule mapped Control+Tab with any additional modifiers to Control+0, also intercepting Control+Command+Tab. Only that conflicting manipulator was removed, with a local backup. Browser setup and key-remapping troubleshooting are documented in `plugins/README.md` and `docs/navigation.md`.
+
+The app was installed at 16:32 with the existing Apple Development signing identity and byte-identical settings. Installed executable SHA-256: `64b5aa1a976e87720bc48b1c11054ac4d762017c22f73bf0799d8e41bd3cbcbe`; strict signature verification passed. Tab inventory errors now log the provider application's ID and failure reason for follow-up diagnosis.
+
+Native acceptance is **incomplete**: scripted browser gestures were interrupted by focus changes, and the Mac subsequently locked (foreground `loginwindow`). This does not establish successful physical shortcuts, exact tab activation through the held-key UI, or final visual acceptance of the installed multi-display overview. AutoRaise was briefly paused for isolated checks and resumed; its configuration was unchanged. The two owned test tabs/window and the owned extension-setup tab were removed. Evidence, config/app backups and build/test logs are under the ignored `logs/navigation-fix-20261030/` directory; no Windows runtime acceptance was performed.
+
+## 2026-10-30 immediate BH continuation
+
+BH now requests the next layer on the continuation keydown. It tracks the physical keys still held from the previous gesture, filters their repeats/releases, and excludes their held modifiers from fresh shortcut/hint matching. A new sticky layer accepts fresh input without requiring the old gesture to be released. Native target verification remains required; failed or unverified activation invalidates queued continuation. Settings help and navigation documentation describe this timing.
+
+Validation: 86 Rust tests passed (one existing native probe ignored), including all six release orders, modifier and Enter alternatives, a held opening Tab, fresh Tab/hint input with old modifiers held, delayed tab loading, cancellation, and consecutive BH layers followed by SB. All 11 navigation/SB Playwright tests passed. Production build, Rust formatting and whitespace checks passed.
+
+The release was installed with the same signing requirement and unchanged settings. Initial installed diagnostics confirmed all BH permissions and the keyboard hook ready without regranting. During interactive testing the installed application was independently re-signed/restarted and the foreground changed. A read-only segment comparison confirmed that its executable code still matches this build. Native key testing stopped without a completed pass; interactive acceptance is pending desktop availability. This entry does not claim Windows runtime or a completed real VS Code tab-switch test. Evidence and the guarded native harness are in `logs/continuation-20261030/`; automated logs are `logs/continuation-rust.log` and `logs/continuation-ui.log`.
+
+## 2026-10-30 local overwrite installation
+
+BeaconHop and ScreenBuoy are installed as local release bundles in `/Applications`, signed with a stable Apple Development identity. This is local signing, not Developer ID distribution or notarization. Existing BH settings and the SB user configuration were preserved; previous apps and configuration are backed up under `logs/install-20261030/backup/`.
+
+The installed diagnostic build passed Chinese desktop labels and thumbnails in held/search modes, application-layer continuation after every originating key is released, both hint neighbours and Enter opening window-scoped SB before key release, and desktop hint → desktop-scoped SB. An SB hint clicked a controlled fixture button without typing into its editor. The final release repeated both desktop-entry checks and actual desktop activation.
+
+Native testing found that this Mac's macOS 27.0.1 exposes Mission Control's display controls under WindowManager, while Dock retains an empty `mc` placeholder. Supporting both owners fixed activation. The final installed release completed desktop 1 → 2 → 1 through BH shortcuts, independently reading back Space IDs 6 → 7 → 6. Final diagnostics reported 23 windows/previews, two displays, four desktops, all BH permissions and the keyboard hook ready, and no warnings. SB's protocol-3 status handshake reported ready.
+
+Replacing BH with a different release binary under the same signing requirement retained permissions without regranting; the subsequent Mission Control fix retained them again. Exact installed hashes and phase-specific evidence: `logs/install-20261030/verification.json`. These checks do not establish Windows runtime or GUI tab-adapter acceptance.
 
 ## Completed checks
 
@@ -179,3 +247,174 @@ Local validation: 44 Rust tests and 27 browser tests passed, along with frontend
 Source commit `a2533486c224d622cab467505aa0ef2585ce0855` passed both native-host CI jobs, including browser tests and packaging: [Check BeaconHop #40813853046](https://github.com/alvinfunborn/beaconhop/actions/runs/40813853046). Both local optimized executables also built successfully. The Mac executable installed at 11:53 on 2026-10-29 has SHA-256 `26adde0e44c8b4de9b956ea4bb3d21fc489dd986ed301ebc400c94ce13d826ec`; the Windows executable has SHA-256 `f44f4eab8aa3b73db900051e71f05231c8e60b1a40384f0e20ac49480777f28d`. Both embed the final frontend asset `index-AnS5-7jr.js`. Installation preserved all settings, including the user's Cmd+Tab hold shortcut and 26% panel opacity. Migration retained 24 of 25 previous window assignments; the migrated pool contained only single-character hints. The installed native settings page shows one character field and the two-character limit.
 
 After replacing the ad-hoc Mac binary, Accessibility and the keyboard hook were restored through standard System Settings. Native diagnostics confirmed 26 windows across two displays. Screen Recording was then toggled and the app restarted through System Settings; final preview acceptance is recorded in the local handoff if available. The last diagnostic before that restart still had Screen Recording false and no cached previews, so that diagnostic does not prove thumbnail readiness. No credentials were entered by automation, no security database was edited, and no release or tag was created. Windows interactive acceptance remains untested. Evidence: `logs/short-hints-final-install.json`, `logs/short-hints-final-native-diagnostics.json`, `logs/short-hints-final-handoff.json`, `logs/short-hints-macos-build.log` and `logs/short-hints-windows-build.log`.
+
+## 2026-11-02 — Optional browser tab previews
+
+Implemented extension-owned, event-driven memory caches and asynchronous BeaconHop preview reads. Chromium capture is an opt-in `<all_urls>` permission in the extension popup. Only active, complete HTTP(S) tabs in a focused normal window are sampled; private/internal/file pages are omitted. Capture is debounced 800 ms, globally throttled to 1/s, with a 10-second same-page cooldown. JPEGs fit 320×180 and 60 KiB each; the LRU is bounded to 100 entries / 4 MiB encoded data. No periodic screenshots, disk cache, background tab activation or capture during list/activate RPCs. Navigation, moved/closed tabs, permission removal and asynchronous identity changes invalidate images. Background page navigation does not cancel another tab's pending capture.
+
+Protocol 1 gained optional capabilities and item preview-availability flags. Legacy adapters remain compatible. Cached images are fetched separately in batches of eight, bound to endpoint epoch, context, item and URL. The tab UI starts reads after asynchronous inventory completion and reserves separate hint, preview and favicon columns. The BH thumbnail setting controls rendering; the browser popup switch also stops capture and clears/revokes permission.
+
+Validation: 92 Rust tests passed (one pre-existing ignored test), six cache/race/budget tests passed, one actual native-host integration test passed, and six navigation Playwright tests passed. TypeScript/app build, `cargo fmt --check`, and whitespace checks passed. UI screenshot `logs/tab-previews-20261102/layout.png` was inspected. Final runtime formatting after the build changed whitespace only. Installed app SHA-256 is `434a3957b7e34d63e11fa5b3e81662837f871392807fcaf4f50c7c53bf0f6576`, with unchanged signing requirement and BH/SB settings. Screen Buoy was not replaced/restarted. The build lease was released.
+
+The existing unpacked Edge extension was reloaded to 0.2.0, and its optional preview permission was enabled through its own button and Edge's permission dialog. A real Edge run on two temporary local fixture pages produced distinct JPEGs (3,875 / 3,855 encoded bytes), advertised both cache entries in inventory, rejected an old URL after navigation, and rejected a closed tab. Six two-image cache reads had median 33.57 ms (27.16–665.94 ms). These are small-fixture RPC timings, not end-to-end shortcut latency or CPU/RAM benchmarks; the long tail must not be hidden by the median. The first attempt missed a capture without sufficient focus evidence. After the background-invalidation fix/reload, a further run observed the fixture window explicitly unfocused and correctly returned no image; it did not complete a second positive run of that last extension revision. All owned windows and temporary servers were closed. No physical Ctrl+Tab or Windows runtime acceptance is claimed.
+
+The existing VS Code adapter was packaged with the official `vsce` tool as `logs/tab-previews-20261102/beaconhop-tabs-0.1.0.vsix` (six files, 4.72 KiB). Its previous real VS Code enumeration/group activation/closed-target/auth test result was verified at `logs/vscode-plugin-qa/plugins/integration-result.txt`; it was not rerun in this iteration. The ordinary VS Code extension list did not contain BeaconHop; no installation into the user's VS Code profile was performed. Plugin discovery/protocol/mounting instructions and current SDK/installer/catalog limitations are documented in `plugins/README.md`.
+
+## 2026-11-02 — Plugin SDK and dynamic manager
+
+- Added dependency-free Node SDK, TypeScript definitions, manifest schema, scaffold, import/check/probe tools, VSIX installation and browser registration. VS Code 0.2.0 bundles the shared SDK. Settings lists registered/live third-party providers and preserves opt-out across reconnect/reimport. Generic cached thumbnails and inline icons use the existing bounded protocol.
+- Validation: 95 Rust tests passed (1 opt-in Codex test ignored); 8 targeted Playwright tests passed; 6 SDK protocol tests, 7 browser/native-host/cache tests and 2 SDK-to-native-manager integration tests passed. Windows cross-check passed with the repository's `.tools/bin/cargo-windows`; Windows runtime and registry installation remain untested.
+- Packaged VSIX was installed with the new installer into an isolated extension directory. A real VS Code extension host passed enumeration, exact cross-group activation, closed-target rejection, authentication and awaited discovery cleanup. Test application processes were independently checked absent. The SDK tarball was installed into a separate consumer directory, and its installed CLI generated and validated a scaffold.
+- Updated `/Applications/BeaconHop.app` with the existing designated signing requirement; BH/SB settings hashes were preserved. Installed binary SHA-256: `3fca141cf5b585d8b94c94fc21aeb5fa3a0f0676bb2c4a1d78b292d5b4f762de`. Screen Buoy was not replaced. VS Code 0.2.0 was installed into the normal extension directory; eight application instances connected automatically and answered read-only inventory probes. No user editor was selected for this production-profile readback.
+- Local deliverables and receipts: `logs/plugin-kit-20261102/` (SDK tarball, VSIX, installed status, package hashes, build/test logs, native install receipt and isolated host cleanup). No npm, VS Code Marketplace or browser-store publication. Shared build leases were released; no queued follow-up remains.
+
+
+## 2026-11-02 — Ctrl+Tab thumbnail grid
+
+CT now shares WT thumbnail cards, small title/favicon metadata, hint styling and geometry-based four-direction navigation. The native panel also uses grid sizing. Large tab inventories scroll rather than shrinking preview cards; search, Tab/Shift+Tab and selected-item visibility remain supported. Explicit list mode remains available.
+
+Validation: 34 navigation/interface Playwright tests passed, including asynchronous cached images, missing/disabled thumbnails, multiple columns, arrows after filtering/resizing and 150-target scrolling. Rust checks passed (99 passed, one opt-in test ignored), including held Ctrl+arrow selection and release-to-activate. Frontend production build and app packaging passed. Screenshot inspected: `logs/tab-grid-20261102/layout.png`.
+
+Updated `/Applications/BeaconHop.app` and verified the installed binary hash `b23e6620e5eafafc615ce531f0e9e9edfe3aef012cd12aab153c244f7f973fdc`, unchanged designated signing requirement, preserved BH/SB settings and running BeaconHop. Screen Buoy PID remained unchanged. Receipts and logs: `logs/tab-grid-20261102/`. Physical shortcut replay and Windows runtime acceptance were not performed in this iteration.
+
+
+## 2026-11-02 — in-app plugin installation
+
+BeaconHop now has a dedicated Application plugins page and a setup entry on the Shortcuts home page. VS Code installation uses a bundled VSIX and the detected editor's own CLI; the backend verifies payload SHA-256, retains a newer installed version, reads back installation, bounds process runtime and prevents concurrent installation. Installation and live connection remain separate states. The Edge path registers the per-user bridge before opening the configured official listing, supports repair, and refreshes previously authorized registrations after a packaged BH update. No extension ID is needed in the normal end-user flow.
+
+Evidence is in `logs/plugin-onboarding-20261102/`:
+
+- Rust suite: **99 passed, 2 ignored**. The explicitly selected real VS Code installer test then passed: installed the bundled VSIX into an isolated profile, read back the version, repeated installation, and removed the profile. The other ignored native permission test was not run.
+- UI suite: **49/50 passed on the first run**; one new test's connection fixture failed to inject into Vite-transformed code. Fixed the fixture and reran all four installer tests: **4/4 passed**, covering the remaining case, with no application logic change needed. All 50 UI cases therefore passed across those runs. Chinese, small-window and native UI screenshots were inspected.
+- SDK **6/6**, packaged payload validation **2/2**, release-binary browser/cache/native manager checks **9/9** passed. Browser store ZIP includes popup styles and all declared runtime assets. Public-release gating correctly rejects the current null Edge listing.
+- Windows MSVC cross-check passed. **No Windows installer/UI acceptance was performed.**
+- Built the macOS app, checked its embedded VSIX hash and Edge ZIP, signed with the existing local signing identity and installed at `/Applications/BeaconHop.app`. Installed executable SHA-256: `f7ca0ad304d0c233f0ae7d75e666e374d3a0a521ae3d920d1afa096deb9d64c4`. Signing requirement and both BH/SB configuration hashes were preserved; no public release or notarization occurred.
+- In the installed native UI, clicked Application plugins, Check / update extension and Repair connection. Observed both VS Code version-query processes and independently read back the rewritten Edge host path. **1 Edge connection and 8 VS Code instances remained connected.** User focus and pointer were restored; Screen Buoy PID stayed unchanged. The ordinary VS Code adapter was already 0.2.0, so the native UI correctly retained that version; fresh installation was proved by the isolated test above.
+- Test processes exited, temporary editor profile was removed, Playwright's server stopped, and host-heavy lease `ad50d8b5768fe3ae6047` was released. The updated normal BH app remains running intentionally.
+
+**Remaining distribution dependency:** `plugins/distribution.json` has no official Edge Add-ons ID/URL. The installation UI correctly reports store installation unavailable for a new user. `src-tauri/resources/plugins/beaconhop-edge.zip`, `plugins/browser/STORE.md` and `plugins/browser/PRIVACY.md` are ready for the project owner's publication workflow; store account/listing assets/privacy URL and actual certification are still required. Store-backed clean-profile installation cannot be accepted until that listing exists. Existing unpacked Edge integration was retained and was not reloaded into its new popup version during this task. VS Code Marketplace/npm publication is not required by the bundled installation flow and was not performed.
+
+## 2026-11-03 — selected-window activation on macOS
+
+Fixed native activation promoting sibling windows along with the selected window.
+The original bridge reproduced `[cover, sibling, other, target]` becoming
+`[target, sibling, cover, other]`, despite reporting the correct focused window.
+Receipt: `logs/single-window-20261103/baseline.json`.
+
+The bridge now restores a hidden application with `AXHidden = false` before
+activating it, selects and raises the target, and uses Process Manager's public
+`kSetFrontProcessFrontWindowOnly` option. It raises the target again after
+activation for applications that defer the first raise. It no longer calls
+application-wide `unhide`, AppKit activation or AX frontmost writes in this path.
+The legacy C APIs use explicit ABI declarations because Swift does not expose
+them as callable declarations. Exact PID/window-ID confirmation and rejection of
+closed targets remain in place.
+
+Hidden restoration waits an additional 300 ms after visibility is confirmed:
+AppKit can still deliver queued key-window notifications after `AXHidden` clears.
+Without that settling interval, the window order was correct but the focused
+window later became nil (`logs/single-window-20261103/hidden-focus-race.json`).
+This delay applies only to hidden applications.
+
+Native acceptance: **5/5 passed** using the actual bridge with two disposable
+applications and four windows. Background, already active and minimized targets
+all retained the relative order of unselected windows and focused the exact
+selected ID. A hidden application retained that order after restoration and
+focused the target. A closed target correctly returned an error. Test fixtures
+were stopped and the original focus restored. Receipts:
+`logs/single-window-20261103/native-acceptance.json` and `acceptance-source.json`.
+The opt-in harness is in `scripts/macos-window-focus/`; it refreshes inventory
+before activation, matching BH's live-window flow.
+
+The release app built successfully from the accepted native source. Signed with
+the existing local signing identity and installed at `/Applications/BeaconHop.app`;
+its designated signing requirement is unchanged. Installed executable SHA-256:
+`aa08cf5c925cc19ee2d953d525e96a8dfd959b76e7281e444f1252361208a411`.
+Independent readback verified the installed hash and signature, running BeaconHop,
+unchanged BH/SB configuration hashes and unchanged Screen Buoy PID 79993. The old
+app and configuration backups remain under `logs/single-window-20261103/backup/`.
+Build/install receipts: `build-final.json`, `install.json` and
+`installed-readback.json` in that evidence directory.
+
+Owned fixture/driver processes exited and host-heavy lease
+`a8cc0a70a46164120fc6` was released. The updated normal BH app remains running.
+No public release or notarization occurred. Windows, fullscreen/cross-Space
+behavior and physical shortcut replay were not accepted in this iteration.
+
+## 2026-11-03 — Codex Ctrl+Tab inventory deadline
+
+Codex inventory used the default `thread/list` path, which scans historical
+rollouts to repair metadata. With the installed CLI 0.166.0-alpha.5.1 and the
+running BH's inherited `CODEX_HOME`, initialization and listing took 11.23
+seconds, exceeding BH's eight-second deadline. Inventory now requests the
+existing state index (`useStateDbOnly`), explicitly includes CLI, VS Code and
+desktop app-server sources, and includes all configured model providers. EOF and
+timeout now produce distinct errors. A successful read logs count and elapsed
+time without session titles or contents.
+
+Real metadata-only probes returned 100 sessions: initialization/list took
+0.928/0.237 seconds for the inherited data directory and 1.624/0.321 seconds for
+the default directory. These are API timings, not physical shortcut acceptance.
+Protocol regressions cover request parameters, notifications and bounded child
+cleanup on timeout. All **104 Rust tests passed**, including the installed
+Codex CLI and isolated real VSIX installation. TypeScript, Vite and the release
+app build passed. Evidence: `logs/ct-codex-20261103/`.
+
+The VS Code adapter does not rewrite editor keybindings: BH's system keyboard
+hook consumes the shortcut before the editor. Added coverage passed for
+Ctrl+Tab, Ctrl+Shift+Tab, down/up/repeat, loading and cancellation, with later
+ordinary keys passed through. Eight VS Code 0.2.0 instances were connected.
+The user's native conflict was not reproduced: guarded shortcut probes were
+aborted when focus changed during a concurrent Screen Buoy native test. No
+VS Code functional shortcut change or physical acceptance is claimed.
+
+Signed and installed the release app at `/Applications/BeaconHop.app` with the
+existing designated signing requirement. Independent readback verified SHA-256
+`6c9ea33bc5f2d1ce0496afa5ea174eee32690cd55c159f80ef7976d98d301db3`,
+the signature, unchanged BH/SB configuration hashes, running BH PID 79570 and
+unchanged Screen Buoy PID 79993. The keyboard tap installed successfully; one
+Edge and eight VS Code connections remained online. The old app/config backups
+and installation receipts remain in the evidence directory. The heavy build
+lease was released; no owned lease/request remains. No public release,
+notarization, native Windows or physical Codex Ctrl+Tab acceptance occurred.
+
+
+## 2026-11-03 — content-specific presentation
+
+Added a shared content presentation model: an optional plugin-context
+`presentation` selects `text` or `thumbnails`, carried on each content target.
+Legacy endpoints with thumbnail capability default to thumbnails; other legacy
+endpoints default to text. The frontend has no provider-name rendering branches.
+Browser cards keep their grid even when an individual image is missing. Codex
+and VS Code use readable single-column rows, separate hint/icon columns and
+scrolling. Explicit user list layout still overrides a thumbnail preference.
+Window/application/desktop layouts retain their existing behavior.
+
+Text targets do not render missing-preview placeholders or request images.
+Native panel sizing follows the same row heights rather than native-parent image
+aspect ratios. An optional bounded `description` is rendered beneath the subtitle
+and included in search. Codex uses persisted preview metadata only when distinct
+from its title, without loading a conversation or generating summaries. Existing
+VS Code 0.2.0 connections gain text presentation through capability fallback,
+without editor reload or keybinding changes. The SDK types, validation and
+protocol documentation expose the same additive fields to external adapters.
+
+Validation: **106 Rust tests passed**, including the installed Codex CLI and
+isolated VSIX installer; **7 SDK tests passed**; **39 Playwright tests passed**.
+Coverage includes explicit/legacy presentation defaults, invalid presentation and
+oversized descriptions, no text image reads, duplicate-name path distinction,
+summary search, hint/icon separation, arrows/activation, 150-target scrolling,
+browser grid and list override, and existing window/desktop navigation. Codex
+and VS Code fixture screenshots were inspected. TypeScript/Vite production
+build passed. Evidence is in `logs/content-presentation-20261103/`.
+
+Built, signed with the existing designated requirement and installed at
+`/Applications/BeaconHop.app`. Independent readback verified executable SHA-256
+`1cd6ba961aff4f9d3fef87bcf888544f6897cf6a62d439e12fbb9ff15c88cca8`,
+the signature, running BH, unchanged BH/SB configuration hashes and unchanged
+Screen Buoy PID during installation. One Edge and eight VS Code 0.2.0 connections
+remained online; the keyboard tap installed successfully. The old app and config
+backups and receipts remain in the evidence directory. No owned build lease,
+queued request or Playwright server remains. This iteration verified fixture
+rendering and installation; physical global shortcut/GUI content activation and
+Windows runtime were not replayed. No public release or notarization occurred.

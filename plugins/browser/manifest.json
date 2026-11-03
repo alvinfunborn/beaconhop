@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "BeaconHop Tabs",
+  "version": "0.2.1",
+  "description": "Switch tabs in the focused browser window with BeaconHop.",
+  "permissions": ["tabs", "nativeMessaging", "alarms", "favicon"],
+  "optional_host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_title": "BeaconHop Tabs", "default_popup": "popup.html" }
+}

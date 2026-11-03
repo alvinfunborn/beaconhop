@@ -298,6 +298,9 @@ unsafe extern "system" fn window_callback(hwnd: HWND, param: LPARAM) -> BOOL {
             height: (r.bottom - r.top) as f64,
         },
         icon: app_icon(hwnd, pid),
+        content: None,
+        desktop_target: false,
+        desktop_label: None,
     });
     true.into()
 }
@@ -327,6 +330,21 @@ pub fn snapshot() -> Result<Snapshot, String> {
             LPARAM(&mut inventory as *mut _ as isize),
         )
         .map_err(|e| e.to_string())?;
+        // Read actual front-to-back order independently of enumeration or MRU.
+        // Bound the traversal: windows can disappear while taking the snapshot.
+        let mut z_order = std::collections::HashMap::new();
+        let mut next = GetTopWindow(None).ok();
+        while let Some(hwnd) = next {
+            let key = hwnd.0 as u64;
+            if hwnd.is_invalid() || z_order.contains_key(&key) || z_order.len() >= 10000 {
+                break;
+            }
+            z_order.insert(key, z_order.len());
+            next = GetWindow(hwnd, GW_HWNDNEXT).ok();
+        }
+        inventory
+            .windows
+            .sort_by_key(|w| z_order.get(&w.native_id).copied().unwrap_or(usize::MAX));
         let front = GetForegroundWindow();
         let mut pid = 0;
         GetWindowThreadProcessId(front, Some(&mut pid));
@@ -335,6 +353,7 @@ pub fn snapshot() -> Result<Snapshot, String> {
             warnings.push("Windows desktop membership is unavailable. Current-desktop filtering excludes unverified windows.".into());
         }
         Ok(Snapshot {
+            desktops: desktop_inventory(),
             windows: inventory.windows,
             displays,
             current_display: format!(
@@ -345,6 +364,52 @@ pub fn snapshot() -> Result<Snapshot, String> {
             warnings,
         })
     }
+}
+fn desktop_inventory() -> Vec<Desktop> {
+    let current = winvd::get_current_desktop()
+        .and_then(|d| d.get_id())
+        .ok()
+        .map(|id| format!("{id:?}"));
+    winvd::get_desktops()
+        .unwrap_or_default()
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, d)| {
+            let id = format!("{:?}", d.get_id().ok()?);
+            let custom_name = d.get_name().ok().filter(|s| !s.is_empty());
+            let label = custom_name.is_none().then_some(DesktopLabel {
+                number: i + 1,
+                full_screen: false,
+            });
+            let name = custom_name.unwrap_or_else(|| format!("Desktop {}", i + 1));
+            Some(Desktop {
+                current: current.as_ref() == Some(&id),
+                id,
+                name,
+                display_id: String::new(),
+                display_ids: Vec::new(),
+                label,
+            })
+        })
+        .collect()
+}
+pub fn activate_desktop(id: &str) -> Result<(), String> {
+    let target = winvd::get_desktops()
+        .map_err(|e| format!("Desktop enumeration failed: {e:?}"))?
+        .into_iter()
+        .find(|d| d.get_id().is_ok_and(|guid| format!("{guid:?}") == id))
+        .ok_or("That desktop no longer exists")?;
+    winvd::switch_desktop(target).map_err(|e| format!("Desktop switch failed: {e:?}"))?;
+    for _ in 0..40 {
+        if winvd::get_current_desktop()
+            .and_then(|d| d.get_id())
+            .is_ok_and(|guid| format!("{guid:?}") == id)
+        {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(40));
+    }
+    Err("Windows did not confirm the selected desktop".into())
 }
 pub fn activate(w: &Destination) -> Result<(), String> {
     unsafe {

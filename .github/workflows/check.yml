@@ -20,13 +20,17 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
+      - run: npm run plugins:prepare
+      - run: npm run test:plugins
       - run: npm run check:version
       - run: npm run build
+      - run: node --test scripts/test-plugin-payloads.mjs
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - run: npm test
       - run: npx playwright install chromium
       - run: npm run test:ui
       - run: npm run tauri -- build --debug
+      - run: node --test scripts/test-browser-plugin.mjs scripts/test-browser-previews.mjs scripts/test-plugin-manager.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

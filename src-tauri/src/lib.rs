@@ -1,3 +1,4 @@
+mod codex_plugin;
 mod config;
 mod engine;
 mod hint_keys;
@@ -6,9 +7,15 @@ mod logger;
 #[cfg(target_os = "macos")]
 mod macos_access;
 mod model;
+mod native_host;
 mod navigation;
+mod overview;
+mod overview_windows;
 mod panel;
 mod platform;
+mod plugin_install;
+mod plugin_manager;
+mod plugins;
 mod runtime;
 mod screen_buoy;
 mod search;
@@ -44,6 +51,58 @@ pub(crate) fn update_tray_language(app: &tauri::AppHandle, language: &str) {
 }
 
 pub fn run() {
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|arg| arg == "--register-browser-host")
+    {
+        let result = if args.len() == 3 {
+            plugin_manager::register_browser(&args[1], &args[2])
+        } else {
+            Err(
+                "Usage: beaconhop --register-browser-host chrome|edge|chromium|brave EXTENSION_ID"
+                    .into(),
+            )
+        };
+        match result {
+            Ok(path) => println!("{path}"),
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    if args.as_slice() == ["--plugin-installation"] {
+        match plugin_install::status() {
+            Ok(status) => println!("{status}"),
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    if args.as_slice() == ["--plugin-status"] {
+        match plugin_manager::get_plugin_status() {
+            Ok(status) => println!("{status}"),
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    if std::env::args()
+        .skip(1)
+        .any(|arg| arg == "--native-host" || arg.starts_with("chrome-extension://"))
+    {
+        if let Err(error) = native_host::run() {
+            eprintln!("BeaconHop native host: {error}");
+        }
+        return;
+    }
     let _ = logger::init_logger("info".into());
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -56,6 +115,13 @@ pub fn run() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
+            plugin_install::get_plugin_installation,
+            plugin_install::install_application_plugin,
+            plugin_manager::get_plugin_status,
+            plugin_manager::set_plugin_enabled,
+            plugin_manager::register_plugin_manifest,
+            plugin_manager::forget_plugin,
+            plugin_manager::register_browser_host,
             screen_buoy::get_screen_buoy_status,
             screen_buoy::connect_screen_buoy,
             screen_buoy::get_screen_buoy_download,
@@ -77,29 +143,18 @@ pub fn run() {
             runtime::cancel,
             runtime::get_thumbnails,
             runtime::get_cached_thumbnails,
+            runtime::get_tab_thumbnails,
             runtime::get_permissions,
             runtime::request_permission,
             runtime::get_diagnostics
         ])
         .setup(|app| {
+            #[cfg(not(debug_assertions))]
+            std::thread::spawn(plugin_install::repair_registered_hosts);
             runtime::init(app.handle().clone())?;
             for label in ["switcher"] {
                 if let Some(panel) = app.get_webview_window(label) {
-                    use tauri::window::{Effect, EffectsBuilder};
-                    #[cfg(target_os = "macos")]
-                    let effects = EffectsBuilder::new()
-                        .effect(Effect::Sidebar)
-                        .state(tauri::window::EffectState::Active)
-                        .radius(17.)
-                        .build();
-                    #[cfg(target_os = "windows")]
-                    let effects = EffectsBuilder::new()
-                        .effect(Effect::Acrylic)
-                        .color(tauri::window::Color(22, 23, 33, 70))
-                        .build();
-                    if let Err(error) = panel.set_effects(effects) {
-                        log::warn!("Panel backdrop unavailable: {error}");
-                    }
+                    overview_windows::backdrop(&panel);
                 }
             }
             let [settings_label, restart_label, quit_label] =
@@ -136,14 +191,16 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                if window.label() == "switcher" {
+                if overview::is_panel(window.label()) {
                     runtime::cancel_inner();
                 } else {
                     let _ = window.hide();
                 }
             }
-            if window.label() == "switcher" && matches!(event, tauri::WindowEvent::Focused(false)) {
-                runtime::lost_focus();
+            if overview::is_panel(window.label())
+                && matches!(event, tauri::WindowEvent::Focused(false))
+            {
+                runtime::panel_lost_focus();
             }
         })
         .build(tauri::generate_context!())

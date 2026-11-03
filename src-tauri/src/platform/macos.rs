@@ -4,6 +4,7 @@ extern "C" {
     fn bh_focused() -> *mut c_char;
     fn bh_snapshot() -> *mut c_char;
     fn bh_activate(pid: i32, id: u32) -> *mut c_char;
+    fn bh_activate_desktop(id: u64) -> *mut c_char;
     fn bh_thumbnails(ids: *const c_char) -> *mut c_char;
     fn bh_free(p: *mut c_char);
     fn bh_screen_permission(request: bool) -> bool;
@@ -28,6 +29,13 @@ pub fn snapshot() -> Result<Snapshot, String> {
 }
 pub fn activate(w: &Destination) -> Result<(), String> {
     match unsafe { string(bh_activate(w.pid as i32, w.native_id as u32)) } {
+        None => Ok(()),
+        Some(error) => Err(error),
+    }
+}
+pub fn activate_desktop(id: &str) -> Result<(), String> {
+    let id = id.parse::<u64>().map_err(|_| "Invalid desktop ID")?;
+    match unsafe { string(bh_activate_desktop(id)) } {
         None => Ok(()),
         Some(error) => Err(error),
     }

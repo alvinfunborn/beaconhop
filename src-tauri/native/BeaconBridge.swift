@@ -4,6 +4,11 @@ import ScreenCaptureKit
 import Darwin
 
 @_silgen_name("_AXUIElementGetWindow") private func axWindowID(_ element: AXUIElement, _ id: UnsafeMutablePointer<CGWindowID>) -> AXError
+// Process Manager can activate just the process's front window. Hidden apps
+// must first be made visible without activating their whole window group.
+// These public C APIs predate Swift's availability cutoff; keep the ABI explicit.
+@_silgen_name("GetProcessForPID") private func processForPID(_ pid: pid_t, _ process: UnsafeMutablePointer<ProcessSerialNumber>) -> OSStatus
+@_silgen_name("SetFrontProcessWithOptions") private func frontProcess(_ process: UnsafePointer<ProcessSerialNumber>, _ options: UInt32) -> OSStatus
 private func onMain<T>(_ fn: () -> T) -> T { Thread.isMainThread ? fn() : DispatchQueue.main.sync(execute: fn) }
 private func attr(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var value: CFTypeRef?
@@ -98,6 +103,93 @@ private func spaces() -> (Int32, Set<UInt64>, [UInt64:Int], Membership?) {
     return (c, active, indexes, symbol("SLSCopySpacesForWindows",Membership.self))
 }
 private var icons = [String:String]() // inventory worker owns this cache
+private struct DesktopRecord {
+    let id: UInt64; let display: UInt32; let name: String; let current: Bool
+    let number: Int; let fullScreen: Bool
+    let displayIDs: [UInt32]
+}
+private func desktopRecords() -> [DesktopRecord] {
+    guard let connection = symbol("SLSMainConnectionID", Connection.self), let managed = symbol("SLSCopyManagedDisplaySpaces", Managed.self) else { return [] }
+    let screens: [(String, UInt32)] = onMain {
+        NSScreen.screens.compactMap { screen in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+                  let uuid = CGDisplayCreateUUIDFromDisplayID(number.uint32Value)?.takeRetainedValue() else { return nil }
+            return (CFUUIDCreateString(nil, uuid) as String, number.uint32Value)
+        }
+    }
+    var records = [DesktopRecord]()
+    let separateSpaces = onMain { NSScreen.screensHaveSeparateSpaces }
+    for display in managed(connection())?.takeRetainedValue() as? [[String:Any]] ?? [] {
+        guard let identifier = display["Display Identifier"] as? String,
+              let screen = screens.first(where: { $0.0 == identifier || (identifier == "Main" && $0.1 == screens.first?.1) }) else { continue }
+        let current = (display["Current Space"] as? [String:Any])?["id64"] as? UInt64
+        for space in display["Spaces"] as? [[String:Any]] ?? [] {
+            guard let id = space["id64"] as? UInt64 else { continue }
+            let full = (space["type"] as? Int ?? 0) != 0
+            records.append(DesktopRecord(id:id, display:screen.1,
+                name:"\(full ? "Full screen" : "Desktop") \(records.count + 1)", current:current == id,
+                number:records.count + 1, fullScreen:full,
+                displayIDs:separateSpaces ? [screen.1] : screens.map { $0.1 }))
+        }
+    }
+    return records
+}
+@_cdecl("bh_activate_desktop") public func bhActivateDesktop(_ id: UInt64) -> UnsafeMutablePointer<CChar>? {
+    guard let target = desktopRecords().first(where: { $0.id == id }) else { return strdup("That desktop no longer exists.") }
+    if target.current { return nil }
+    guard AXIsProcessTrusted() else { return strdup("Desktop switching requires Accessibility access.") }
+    // Newer macOS versions host Mission Control in WindowManager. Dock can
+    // still publish an empty "mc" placeholder even while that UI is closed.
+    let roots = ["com.apple.WindowManager", "com.apple.dock"].compactMap { identifier -> AXUIElement? in
+        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier:identifier).first else { return nil }
+        let root = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(root, 0.2)
+        return root
+    }
+    func children(_ node: AXUIElement) -> [AXUIElement] { attr(node,"AXChildren") as? [AXUIElement] ?? [] }
+    func named(_ node: AXUIElement, _ name: String) -> AXUIElement? { children(node).first { attr($0,"AXIdentifier") as? String == name } }
+    func missionDisplays() -> [AXUIElement] {
+        roots.flatMap { root in
+            (children(root) + (named(root,"mc").map(children) ?? [])).filter {
+                attr($0,"AXIdentifier") as? String == "mc.display"
+            }
+        }
+    }
+    let alreadyOpen = !missionDisplays().isEmpty
+    if !alreadyOpen {
+        let process = Process(); process.executableURL = URL(fileURLWithPath:"/usr/bin/open")
+        process.arguments = ["/System/Applications/Mission Control.app"]
+        do { try process.run(); process.waitUntilExit() } catch { return strdup("Could not open Mission Control.") }
+    }
+    let deadline = Date().addingTimeInterval(2)
+    var pressed = false
+    while Date() < deadline {
+        if let display = missionDisplays().first(where: { (attr($0,"AXDisplayID") as? NSNumber)?.uint32Value == target.display }),
+           let spaces = named(display,"mc.spaces"), let list = named(spaces,"mc.spaces.list") {
+            Thread.sleep(forTimeInterval:0.3)
+            // Re-read stable IDs after the animation, before using positional buttons.
+            let fresh = desktopRecords().filter { $0.display == target.display }
+            let buttons = children(list)
+            if fresh.count == buttons.count, let index = fresh.firstIndex(where: { $0.id == id }) {
+                pressed = AXUIElementPerformAction(buttons[index], "AXPress" as CFString) == .success
+                break
+            }
+        }
+        Thread.sleep(forTimeInterval:0.04)
+    }
+    if pressed {
+        for _ in 0..<40 {
+            if desktopRecords().contains(where: { $0.id == id && $0.current }) { return nil }
+            Thread.sleep(forTimeInterval:0.04)
+        }
+    }
+    if !alreadyOpen, !missionDisplays().isEmpty {
+        // Close only the Mission Control UI opened by this request.
+        CGEvent(keyboardEventSource:nil,virtualKey:53,keyDown:true)?.post(tap:.cghidEventTap)
+        CGEvent(keyboardEventSource:nil,virtualKey:53,keyDown:false)?.post(tap:.cghidEventTap)
+    }
+    return strdup("Mission Control could not confirm the selected desktop. This macOS version may not expose its controls.")
+}
 private func icon(_ app: NSRunningApplication) -> String? {
     let key = app.bundleIdentifier ?? String(app.processIdentifier)
     if let result = icons[key] {return result}
@@ -201,27 +293,53 @@ private func icon(_ app: NSRunningApplication) -> String? {
             (item[kCGWindowNumber as String] as? UInt32).map {($0,index)}
         })
         result.sort { (zOrder[$0["nativeId"] as? UInt32 ?? 0] ?? Int.max) < (zOrder[$1["nativeId"] as? UInt32 ?? 0] ?? Int.max) }
-        return json(["windows":result,"displays":displays,"currentDisplay":currentDisplay,"focusedId":focused as Any? ?? NSNull(),"warnings":warnings])
+        let desktops: [[String:Any]] = desktopRecords().map { ["id":String($0.id),"name":$0.name,"displayId":String($0.display),"displayIds":$0.displayIDs.map(String.init),"current":$0.current,"label":["number":$0.number,"fullScreen":$0.fullScreen]] }
+        return json(["windows":result,"desktops":desktops,"displays":displays,"currentDisplay":currentDisplay,"focusedId":focused as Any? ?? NSNull(),"warnings":warnings])
     }
 }
 private extension CGRect { var area: Double { isNull ? 0 : width * height } }
 @_cdecl("bh_activate") public func bhActivate(_ pid: Int32, _ id: UInt32) -> UnsafeMutablePointer<CChar>? {
-    guard let app = NSRunningApplication(processIdentifier:pid), let window = cachedWindow(pid,id), windowID(window) == id else {return strdup("The selected window has closed.")}
+    guard NSRunningApplication(processIdentifier:pid) != nil, let window = cachedWindow(pid,id), windowID(window) == id else {return strdup("The selected window has closed.")}
+    var process = ProcessSerialNumber()
+    guard processForPID(pid,&process) == noErr else {return strdup("The selected application has closed.")}
     let appElement = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(appElement,0.25)
+    if attr(appElement,kAXHiddenAttribute) as? Bool == true {
+        // AXHidden restores the windows in place without application activation.
+        // Activating a still-hidden app instead lifts all its windows together,
+        // even with kSetFrontProcessFrontWindowOnly.
+        guard AXUIElementSetAttributeValue(appElement,kAXHiddenAttribute as CFString,kCFBooleanFalse) == .success else {
+            return strdup("macOS could not show the selected application's window.")
+        }
+        for _ in 0..<20 {
+            if attr(appElement,kAXHiddenAttribute) as? Bool == false { break }
+            Thread.sleep(forTimeInterval:0.025)
+        }
+        guard attr(appElement,kAXHiddenAttribute) as? Bool == false else {
+            return strdup("The selected application is still hidden.")
+        }
+        // AppKit may still have queued unhide/key-window notifications after
+        // AXHidden clears. Let those settle before assigning keyboard focus.
+        Thread.sleep(forTimeInterval:0.3)
+    }
     _ = AXUIElementSetAttributeValue(window,kAXMinimizedAttribute as CFString,kCFBooleanFalse)
-    onMain { app.unhide(); app.activate(options:[]) }
-    _ = AXUIElementSetAttributeValue(appElement,kAXFrontmostAttribute as CFString,kCFBooleanTrue)
-    _ = AXUIElementSetAttributeValue(appElement,kAXFocusedWindowAttribute as CFString,window)
-    _ = AXUIElementSetAttributeValue(window,kAXMainAttribute as CFString,kCFBooleanTrue)
-    _ = AXUIElementPerformAction(window,kAXRaiseAction as CFString)
+    func focusSelectedWindow() -> OSStatus {
+        // Select/raise the destination BEFORE activating its application. App-wide
+        // AXFrontmost/unhide restacks sibling windows above unrelated applications.
+        _ = AXUIElementSetAttributeValue(appElement,kAXFocusedWindowAttribute as CFString,window)
+        _ = AXUIElementSetAttributeValue(window,kAXMainAttribute as CFString,kCFBooleanTrue)
+        _ = AXUIElementPerformAction(window,kAXRaiseAction as CFString)
+        let status = frontProcess(&process,UInt32(kSetFrontProcessFrontWindowOnly))
+        // Some applications defer the first raise until they become active.
+        _ = AXUIElementPerformAction(window,kAXRaiseAction as CFString)
+        return status
+    }
+    guard focusSelectedWindow() == noErr else {return strdup("macOS could not activate the selected window.")}
     for attempt in 0..<30 {
         let front = onMain { NSWorkspace.shared.frontmostApplication?.processIdentifier }
         if front == pid, let value = attr(appElement,kAXFocusedWindowAttribute), windowID(unsafeBitCast(value,to:AXUIElement.self)) == id {return nil}
         if attempt == 8 {
-            _ = AXUIElementSetAttributeValue(appElement,kAXFrontmostAttribute as CFString,kCFBooleanTrue)
-            _ = AXUIElementSetAttributeValue(appElement,kAXFocusedWindowAttribute as CFString,window)
-            _ = AXUIElementPerformAction(window,kAXRaiseAction as CFString)
+            _ = focusSelectedWindow()
         }
         Thread.sleep(forTimeInterval:0.05)
     }

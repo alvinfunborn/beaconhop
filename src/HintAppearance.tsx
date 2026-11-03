@@ -8,7 +8,7 @@ export function HintAppearance({ value, defaults, onChange, t }: {
   function change<K extends keyof HintStyle>(key: K, next: HintStyle[K]) {
     onChange({ ...value, [key]: next });
   }
-  return <section className="hint-appearance">
+  return <section className="hint-appearance" id="hint-appearance" tabIndex={-1}>
     <div className="update-actions"><h2>{t("Hint style", "Hint 样式")}</h2>
       <button className="button ghost" onClick={() => onChange({ ...defaults })}>{t("Restore default hint style", "恢复默认 Hint 样式")}</button>
     </div>

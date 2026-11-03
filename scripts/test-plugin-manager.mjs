@@ -1,0 +1,36 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import sdk from '../plugins/sdk/index.cjs';
+const run=promisify(execFile);
+const executable=process.env.BH_TEST_EXECUTABLE || path.resolve(process.platform==='win32'?'src-tauri/target/debug/beaconhop.exe':'src-tauri/target/debug/beaconhop');
+test('native manager discovers multiple SDK instances, retains offline metadata and opt-out',async t=>{
+  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'bh-manager-'));
+  const connections=[];
+  t.after(async()=>{for(const connection of connections)await connection.dispose();await fs.rm(directory,{recursive:true,force:true});});
+  const options={directory,manifest:{protocol:1,id:'thirdparty.qa',name:'Third-party QA',version:'1.2.3',appIds:['com.test.qa']},list:()=>({contexts:[]}),activate:target=>({...target,verified:true})};
+  const read=async()=>JSON.parse((await run(executable,['--plugin-status'],{env:{...process.env,BEACONHOP_PLUGIN_DIR:directory},timeout:10000})).stdout);
+  for(let i=0;i<2;i++)connections.push(await sdk.startPlugin(options));
+  const status=await read();const row=status.entries.find(p=>p.provider==='thirdparty.qa');
+  assert.equal(row.name,'Third-party QA');assert.equal(row.instances,2);assert.equal(row.connected,true);assert.deepEqual(row.versions,['1.2.3']);assert.equal(row.registered,true);
+  assert(!JSON.stringify(status).includes('token'));assert(!JSON.stringify(status).includes('port'));
+  await fs.writeFile(path.join(directory,'preferences.json'),JSON.stringify({disabled:['thirdparty.qa']}));
+  assert.equal((await read()).entries.find(p=>p.provider==='thirdparty.qa').enabled,false);
+  for(const connection of connections)await connection.dispose();
+  const offline=(await read()).entries.find(p=>p.provider==='thirdparty.qa');assert.equal(offline.instances,0);assert.equal(offline.connected,false);assert.equal(offline.enabled,false);
+  await fs.writeFile(path.join(directory,'registry','bad.json'),'{}');assert.equal((await read()).invalidManifests,1);
+});
+test('browser CLI registration is idempotent and preserves other extension IDs', {skip:process.platform!=='darwin'},async t=>{
+  const home=await fs.mkdtemp(path.join(os.tmpdir(),'bh-browser-reg-'));t.after(()=>fs.rm(home,{recursive:true,force:true}));
+  const env={...process.env,HOME:home};
+  for(const id of ['a'.repeat(32),'b'.repeat(32),'a'.repeat(32)]) await run(executable,['--register-browser-host','edge',id],{env,timeout:10000});
+  const filename=path.join(home,'Library/Application Support/Microsoft Edge/NativeMessagingHosts/com.beaconhop.tabs.json');
+  const manifest=JSON.parse(await fs.readFile(filename,'utf8'));
+  assert.equal(manifest.path,executable);assert.equal(manifest.allowed_origins.length,2);
+  await assert.rejects(run(executable,['--register-browser-host','edge','invalid'],{env,timeout:10000}));
+  assert.deepEqual(JSON.parse(await fs.readFile(filename,'utf8')),manifest);
+});

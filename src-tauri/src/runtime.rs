@@ -22,6 +22,7 @@ struct Runtime {
     config_path: PathBuf,
     previews: Mutex<HashMap<String, (Instant, String)>>,
     capture: Mutex<()>,
+    inventory: Mutex<()>,
     config_warning: Mutex<Option<String>>,
 }
 static RECORDING: AtomicBool = AtomicBool::new(false);
@@ -107,6 +108,10 @@ pub fn init(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let (sender, receiver) = mpsc::channel();
     let mut engine = Engine::new(config.clone());
     engine.hints = crate::stable_hints::StableHints::load(&directory.join("hints.json"));
+    engine.overview = std::fs::read(directory.join("overview.json"))
+        .ok()
+        .and_then(|data| serde_json::from_slice(&data).ok())
+        .unwrap_or_default();
     let runtime = Arc::new(Runtime {
         app: app.clone(),
         engine: Mutex::new(engine),
@@ -114,6 +119,7 @@ pub fn init(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         config_path: path,
         previews: Mutex::new(HashMap::new()),
         capture: Mutex::new(()),
+        inventory: Mutex::new(()),
         config_warning: Mutex::new(config_error.clone()),
     });
     RUNTIME
@@ -132,6 +138,7 @@ pub fn init(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     std::thread::Builder::new()
         .name("window-inventory".into())
         .spawn(move || loop {
+            let inventory = rt().inventory.lock().unwrap();
             match platform::snapshot() {
                 Ok(mut snapshot) => {
                     if let Some(error) = rt().config_warning.lock().unwrap().as_ref() {
@@ -139,8 +146,18 @@ pub fn init(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                             .warnings
                             .push(format!("Could not load settings: {error}"));
                     }
+                    let tab_apps = crate::plugins::supported_apps();
                     let mut e = rt().engine.lock().unwrap();
+                    e.tab_apps = tab_apps;
                     snapshot.focused_id = e.snapshot.focused_id.clone();
+                    let topology_changed = serde_json::to_string(&snapshot.displays).ok()
+                        != serde_json::to_string(&e.snapshot.displays).ok();
+                    let displays = snapshot.displays.clone();
+                    if topology_changed && e.session.mode != Mode::Inactive {
+                        // A disconnected screen cannot retain an invisible selection.
+                        let actions = e.dismiss();
+                        dispatch(actions);
+                    }
                     e.update(snapshot);
                     let learned = if e.hints.dirty {
                         e.hints.dirty = false;
@@ -149,6 +166,9 @@ pub fn init(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                         None
                     };
                     drop(e);
+                    if topology_changed {
+                        dispatch(vec![Action::PrepareDisplays(displays)]);
+                    }
                     if let Some(data) = learned {
                         let path = rt().config_path.with_file_name("hints.json");
                         let pending = path.with_extension("pending");
@@ -165,13 +185,22 @@ pub fn init(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     log::warn!("Window inventory failed: {error}");
                 }
             }
+            drop(inventory);
             std::thread::sleep(Duration::from_millis(600));
         })?;
     std::thread::Builder::new()
         .name("window-focus".into())
         .spawn(move || loop {
+            let session_id = rt().engine.lock().unwrap().session.session_id;
             let focused = platform::focused_id();
-            rt().engine.lock().unwrap().observe_focus(focused);
+            let mut e = rt().engine.lock().unwrap();
+            let actions = if e.session.session_id == session_id {
+                e.observe_native_focus(focused)
+            } else {
+                vec![]
+            };
+            drop(e);
+            dispatch(actions);
             std::thread::sleep(Duration::from_millis(80));
         })?;
     std::thread::Builder::new()
@@ -251,6 +280,30 @@ fn show(search: bool) {
         return;
     };
     let session = rt().engine.lock().unwrap().session.clone();
+    if !session.overview.is_empty() {
+        let saved = serde_json::to_vec(&rt().engine.lock().unwrap().overview).ok();
+        if let Some(data) = saved {
+            let path = rt().config_path.with_file_name("overview.json");
+            let pending = path.with_extension("pending");
+            if let Err(error) =
+                std::fs::write(&pending, data).and_then(|_| std::fs::rename(pending, path))
+            {
+                log::warn!("Could not save overview positions: {error}");
+            }
+        }
+        if let Err(error) = crate::overview_windows::show(&rt().app, &session.overview, search) {
+            log::error!("Could not show all display overviews: {error}");
+            let actions = rt().engine.lock().unwrap().cancel();
+            dispatch(actions);
+            hide();
+        }
+        return;
+    }
+    for (label, other) in rt().app.webview_windows() {
+        if label.starts_with("switcher-display-") {
+            let _ = other.hide();
+        }
+    }
     if let Some(display) = session.display {
         let b = display.bounds;
         #[cfg(target_os = "macos")]
@@ -264,12 +317,26 @@ fn show(search: bool) {
             height: b.height / scale,
             ..Bounds::default()
         };
-        let (width, height) = crate::panel::size(
-            &windows,
-            &logical,
-            compact,
-            session.warnings.len().min(3) as f64 * 36.,
-        );
+        let text_content = session.layer == Layer::Tabs
+            && (compact
+                || windows
+                    .first()
+                    .and_then(|w| w.content.as_ref())
+                    .is_none_or(|c| c.presentation == crate::model::ContentPresentation::Text));
+        let (width, height) = if text_content {
+            crate::panel::text_size(
+                &windows,
+                &logical,
+                session.warnings.len().min(3) as f64 * 36.,
+            )
+        } else {
+            crate::panel::size(
+                &windows[..windows.len().min(80)],
+                &logical,
+                compact,
+                session.warnings.len().min(3) as f64 * 36.,
+            )
+        };
         let (width, height) = (width * scale, height * scale);
         #[cfg(target_os = "macos")]
         {
@@ -291,13 +358,11 @@ fn show(search: bool) {
     platform::show_panel(&window, search);
 }
 fn hide() {
-    platform::clear_previews();
-    if let Some(w) = rt().app.get_webview_window("switcher") {
-        let _ = w.hide();
-    }
+    crate::overview_windows::hide(&rt().app);
 }
 fn perform(action: Action) {
     match action {
+        Action::PrepareDisplays(displays) => crate::overview_windows::warm(&rt().app, &displays),
         Action::Record(shortcut) => {
             let _ = rt().app.emit("shortcut-recorded", shortcut);
         }
@@ -307,20 +372,105 @@ fn perform(action: Action) {
             show(search);
         }
         Action::Search => show(true),
-        Action::ScreenBuoy(session_id, target, held_keys) => {
+        Action::LoadTabs(session_id, origin) => {
+            if rt().engine.lock().unwrap().session.session_id != session_id {
+                return;
+            }
+            if platform::focused_id().is_none() {
+                let _ = platform::activate(&origin);
+            }
+            show(false); // Loading is nonactivating: providers must still see their focused window.
             std::thread::spawn(move || {
                 let current = || {
                     let e = rt().engine.lock().unwrap();
-                    let valid = e.sb_pending
+                    e.session.session_id == session_id
+                        && e.session.mode != Mode::Inactive
+                        && e.session.loading
+                };
+                if !current() {
+                    return;
+                }
+                // Search can own focus when changing layers. Restore only that captured origin.
+                let home = rt().engine.lock().unwrap().config.codex_home.clone();
+                let started = Instant::now();
+                let result = if platform::focused_id().as_ref() != Some(&origin.id) {
+                    Err(
+                        "Focus changed before tabs could be read. Focus the application and retry."
+                            .into(),
+                    )
+                } else {
+                    crate::plugins::list(&origin, &home)
+                };
+                if let Err(error) = &result {
+                    log::warn!("Tab inventory failed for {}: {error}", origin.app_id);
+                } else if let Ok(items) = &result {
+                    log::info!(
+                        "Tab inventory ready: session={session_id} app={} count={} elapsed_ms={}",
+                        origin.app_id,
+                        items.len(),
+                        started.elapsed().as_millis()
+                    );
+                }
+                if !current() {
+                    return;
+                }
+                if platform::focused_id().as_ref() != Some(&origin.id) {
+                    let mut e = rt().engine.lock().unwrap();
+                    let actions = if e.session.session_id == session_id {
+                        e.dismiss()
+                    } else {
+                        vec![]
+                    };
+                    drop(e);
+                    dispatch(actions);
+                    return;
+                }
+                let actions = rt().engine.lock().unwrap().tabs_loaded(session_id, result);
+                dispatch(actions);
+            });
+        }
+        Action::Continue(session_id, target, layer) => {
+            let focused = platform::focused_id();
+            let mut e = rt().engine.lock().unwrap();
+            if e.session.session_id != session_id || e.session.mode != Mode::Inactive {
+                return;
+            }
+            if target.desktop_target {
+                if !e
+                    .snapshot
+                    .desktops
+                    .iter()
+                    .any(|d| d.id == target.desktop_id && d.current)
+                {
+                    return;
+                }
+                e.snapshot.focused_id = focused;
+            } else if focused.as_ref() != Some(&target.id) {
+                e.clear_extension();
+                return;
+            }
+            let actions = e.continue_layer(session_id, target, layer);
+            drop(e);
+            dispatch(actions);
+        }
+        Action::ScreenBuoy(session_id, target, held_keys) => {
+            std::thread::spawn(move || {
+                let current = || {
+                    let focused = if target.desktop_target {
+                        None
+                    } else {
+                        platform::focused_id()
+                    };
+                    let e = rt().engine.lock().unwrap();
+                    e.sb_pending
                         && e.config.screen_buoy.enabled
                         && e.session.session_id == session_id
                         && e.session.mode == Mode::Inactive
-                        && e.snapshot
-                            .windows
-                            .iter()
-                            .any(|w| w.id == target.id && w.pid == target.pid);
-                    drop(e);
-                    valid && platform::focused_id().as_ref() == Some(&target.id)
+                        && crate::screen_buoy::target_is_current(
+                            &target,
+                            &e.snapshot,
+                            focused.as_deref(),
+                        )
                 };
                 if !current() {
                     return;
@@ -337,7 +487,7 @@ fn perform(action: Action) {
                     });
                 if let Err(error) = result {
                     if current() {
-                        log::warn!("Screen Buoy handoff failed: {error}");
+                        log::warn!("Screen Buoy handoff failed: session={session_id} target={} desktop={} {error}", target.id, target.desktop_id);
                         show_settings(&rt().app);
                         let _ = rt().app.emit("screen-buoy-error", error);
                     }
@@ -353,12 +503,56 @@ fn perform(action: Action) {
                 return;
             }
             hide();
-            match platform::activate(&target) {
+            log::info!(
+                "Activating destination: session={session_id} target={} desktop={}",
+                target.id,
+                target.desktop_id
+            );
+            let result = if target.desktop_target {
+                platform::activate_desktop(&target.desktop_id).and_then(|_| {
+                    let _inventory = rt().inventory.lock().unwrap();
+                    let snapshot = platform::snapshot()?;
+                    if !snapshot
+                        .desktops
+                        .iter()
+                        .any(|d| d.id == target.desktop_id && d.current)
+                    {
+                        return Err("The desktop switch could not be confirmed".into());
+                    }
+                    rt().engine.lock().unwrap().update(snapshot);
+                    Ok(())
+                })
+            } else if target.content.is_some() {
+                platform::activate(&target.native_target())
+                    .and_then(|_| crate::plugins::activate(&target))
+                    .and_then(|verified| {
+                        if !verified {
+                            rt().engine.lock().unwrap().clear_extension();
+                        }
+                        if platform::focused_id().as_ref() != Some(&target.native_target().id) {
+                            return Err(
+                                "The selected tab did not return to its original window".into()
+                            );
+                        }
+                        Ok(())
+                    })
+            } else {
+                platform::activate(&target)
+            };
+            match result {
                 Ok(()) => {
-                    rt().engine
-                        .lock()
-                        .unwrap()
-                        .finish_activation(session_id, Some(target.id));
+                    log::info!(
+                        "Activated destination: session={session_id} target={}",
+                        target.id
+                    );
+                    rt().engine.lock().unwrap().finish_activation(
+                        session_id,
+                        if target.desktop_target {
+                            platform::focused_id()
+                        } else {
+                            Some(target.native_target().id)
+                        },
+                    );
                     publish();
                 }
                 Err(error) => {
@@ -366,6 +560,7 @@ fn perform(action: Action) {
                     let focused = platform::focused_id();
                     {
                         let mut e = rt().engine.lock().unwrap();
+                        e.clear_extension();
                         e.finish_activation(session_id, focused);
                         if e.session.session_id != session_id {
                             return;
@@ -419,12 +614,28 @@ pub fn cancel_inner() {
     let actions = rt().engine.lock().unwrap().cancel();
     dispatch(actions);
 }
-pub fn lost_focus() {
+pub fn panel_lost_focus() {
     if RUNTIME.get().is_none() {
         return;
     }
+    let session_id = rt().engine.lock().unwrap().session.session_id;
+    std::thread::spawn(move || {
+        // Moving focus between the search fields on two monitors is internal.
+        std::thread::sleep(Duration::from_millis(80));
+        if rt()
+            .app
+            .webview_windows()
+            .iter()
+            .any(|(label, w)| crate::overview::is_panel(label) && w.is_focused().unwrap_or(false))
+        {
+            return;
+        }
+        lost_focus(session_id);
+    });
+}
+fn lost_focus(session_id: u64) {
     let mut e = rt().engine.lock().unwrap();
-    if e.session.mode == Mode::Search {
+    if e.session.session_id == session_id && e.session.mode == Mode::Search && !e.session.loading {
         e.session.mode = Mode::Inactive;
         drop(e);
         hide();
@@ -526,9 +737,21 @@ pub fn navigate(delta: isize, session_id: u64) {
     dispatch(vec![Action::Publish]);
 }
 #[tauri::command]
-pub fn set_navigation(session_id: u64, rectangles: HashMap<String, Bounds>) {
+pub fn set_navigation(
+    window: tauri::WebviewWindow,
+    session_id: u64,
+    rectangles: HashMap<String, Bounds>,
+) {
     let mut e = rt().engine.lock().unwrap();
     if e.session.session_id != session_id || e.session.mode == Mode::Inactive {
+        return;
+    }
+    if !e.session.overview.is_empty() {
+        let panels = e.session.overview.clone();
+        crate::overview::merge_navigation(&panels, window.label(), &mut e.navigation, rectangles);
+        return;
+    }
+    if window.label() != "switcher" {
         return;
     }
     e.navigation = rectangles
@@ -578,8 +801,22 @@ fn preview_targets(ids: &[String], session_id: u64) -> Vec<Destination> {
     if !e.config.thumbnails
         || e.session.mode == Mode::Inactive
         || e.session.session_id != session_id
+        || e.session.layer == Layer::Tabs
     {
         return vec![];
+    }
+    if e.session.layer == Layer::Desktops {
+        let mut seen = std::collections::HashSet::new();
+        return e
+            .session
+            .windows
+            .iter()
+            .filter_map(|desktop| e.session.desktop_previews.get(&desktop.window.id))
+            .flat_map(|preview| &preview.windows)
+            .filter(|w| ids.contains(&w.id) && seen.insert(w.id.clone()))
+            .take(80)
+            .cloned()
+            .collect();
     }
     e.session
         .windows
@@ -655,6 +892,32 @@ fn capture_previews(windows: &[Destination]) -> HashMap<String, String> {
     cached_previews(windows)
 }
 #[tauri::command]
+pub async fn get_tab_thumbnails(
+    ids: Vec<String>,
+    session_id: u64,
+) -> Result<HashMap<String, String>, String> {
+    let targets = {
+        let e = rt().engine.lock().unwrap();
+        if !e.config.thumbnails
+            || e.session.mode == Mode::Inactive
+            || e.session.session_id != session_id
+            || e.session.layer != Layer::Tabs
+        {
+            return Ok(HashMap::new());
+        }
+        e.session
+            .windows
+            .iter()
+            .filter(|w| ids.contains(&w.window.id))
+            .take(8)
+            .map(|w| w.window.clone())
+            .collect::<Vec<_>>()
+    };
+    tauri::async_runtime::spawn_blocking(move || crate::plugins::thumbnails(&targets))
+        .await
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
 pub fn get_cached_thumbnails(ids: Vec<String>, session_id: u64) -> HashMap<String, String> {
     if !platform::permissions().screen_recording {
         rt().previews.lock().unwrap().clear();
@@ -676,7 +939,7 @@ pub async fn get_thumbnails(
 #[tauri::command]
 pub fn get_diagnostics() -> serde_json::Value {
     let e = rt().engine.lock().unwrap();
-    serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"platform":std::env::consts::OS,"permissions":platform::permissions(),"previewCount":rt().previews.lock().unwrap().len(),"windowCount":e.snapshot.windows.len(),"displayCount":e.snapshot.displays.len(),"desktopKnown":e.snapshot.windows.iter().filter(|w|w.current_desktop.is_some()).count(),"warnings":e.snapshot.warnings,"configPath":rt().config_path,"sessionMode":e.session.mode})
+    serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"platform":std::env::consts::OS,"permissions":platform::permissions(),"previewCount":rt().previews.lock().unwrap().len(),"windowCount":e.snapshot.windows.len(),"displayCount":e.snapshot.displays.len(),"desktopKnown":e.snapshot.windows.iter().filter(|w|w.current_desktop.is_some()).count(),"warnings":e.snapshot.warnings,"configPath":rt().config_path,"sessionMode":e.session.mode,"sessionLayer":e.session.layer,"loading":e.session.loading,"desktopCount":e.snapshot.desktops.len(),"tabApplicationCount":e.tab_apps.len()})
 }
 
 #[tauri::command]
@@ -687,13 +950,29 @@ pub fn record_shortcut(enabled: bool, single_key: Option<bool>) -> bool {
 }
 #[tauri::command]
 pub fn set_live_preview(
+    panel: tauri::WebviewWindow,
     id: String,
     session_id: u64,
     bounds: Option<Bounds>,
     hint_bounds: Option<Bounds>,
 ) -> bool {
     let e = rt().engine.lock().unwrap();
-    if e.session.session_id != session_id || e.session.mode == Mode::Inactive {
+    if e.session.session_id != session_id
+        || e.session.mode == Mode::Inactive
+        || matches!(e.session.layer, Layer::Tabs | Layer::Desktops)
+    {
+        return false;
+    }
+    if e.session.overview.is_empty() {
+        if panel.label() != "switcher" {
+            return false;
+        }
+    } else if !e
+        .session
+        .overview
+        .iter()
+        .any(|p| p.label == panel.label() && p.slots.iter().flatten().any(|i| i == &id))
+    {
         return false;
     }
     let Some(target) = e
@@ -706,12 +985,9 @@ pub fn set_live_preview(
         return false;
     };
     drop(e);
-    let Some(panel) = rt().app.get_webview_window("switcher") else {
-        return false;
-    };
     platform::live_preview(
         &panel,
-        &format!("{session_id}:{id}"),
+        &format!("{session_id}:{}:{id}", panel.label()),
         &target,
         bounds,
         hint_bounds,
@@ -724,6 +1000,6 @@ fn write_probe() {
         return;
     };
     let e = rt().engine.lock().unwrap();
-    let data = serde_json::json!({"processId":std::process::id(),"permissions":platform::permissions(),"windows":e.snapshot.windows.iter().map(|w|serde_json::json!({"id":w.id,"pid":w.pid,"nativeId":w.native_id,"displayId":w.display_id,"desktopId":w.desktop_id,"currentDesktop":w.current_desktop,"minimized":w.minimized,"hidden":w.hidden})).collect::<Vec<_>>(),"displays":e.snapshot.displays,"focusedId":e.snapshot.focused_id,"sessionMode":e.session.mode,"sessionId":e.session.session_id,"selected":e.session.selected,"hints":e.session.windows.iter().map(|w|serde_json::json!({"id":w.window.id,"hint":w.hint})).collect::<Vec<_>>(),"warnings":e.snapshot.warnings});
+    let data = serde_json::json!({"processId":std::process::id(),"permissions":platform::permissions(),"windows":e.snapshot.windows.iter().map(|w|serde_json::json!({"id":w.id,"pid":w.pid,"nativeId":w.native_id,"displayId":w.display_id,"desktopId":w.desktop_id,"currentDesktop":w.current_desktop,"minimized":w.minimized,"hidden":w.hidden})).collect::<Vec<_>>(),"displays":e.snapshot.displays,"focusedId":e.snapshot.focused_id,"sessionMode":e.session.mode,"sessionLayer":e.session.layer,"loading":e.session.loading,"desktops":e.snapshot.desktops,"sessionId":e.session.session_id,"selected":e.session.selected,"hints":e.session.windows.iter().map(|w|serde_json::json!({"id":w.window.id,"hint":w.hint})).collect::<Vec<_>>(),"warnings":e.snapshot.warnings});
     let _ = std::fs::write(path, serde_json::to_vec_pretty(&data).unwrap());
 }

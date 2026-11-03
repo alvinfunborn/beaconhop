@@ -13,6 +13,31 @@ pub struct Config {
     pub search_shortcut: String,
     pub search_entry_key: String,
     pub hold_enabled: bool,
+    pub application_enabled: bool,
+    pub application_hold_shortcut: String,
+    pub application_search_shortcut: String,
+    pub tabs_enabled: bool,
+    pub tabs_hold_shortcut: String,
+    pub tabs_search_shortcut: String,
+    #[serde(
+        alias = "applicationHintKey",
+        deserialize_with = "crate::hint_keys::deserialize_bindings"
+    )]
+    pub application_hint_keys: Vec<String>,
+    #[serde(
+        alias = "tabsHintKey",
+        deserialize_with = "crate::hint_keys::deserialize_bindings"
+    )]
+    pub tabs_hint_keys: Vec<String>,
+    pub desktops_enabled: bool,
+    pub desktops_hold_shortcut: String,
+    pub desktops_search_shortcut: String,
+    #[serde(
+        alias = "windowsHintKey",
+        deserialize_with = "crate::hint_keys::deserialize_bindings"
+    )]
+    pub windows_hint_keys: Vec<String>,
+    pub codex_home: String,
     pub desktop_scope: Scope,
     pub display_scope: Scope,
     pub include_minimized: bool,
@@ -89,15 +114,23 @@ pub enum Scope {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            hold_shortcut: if cfg!(target_os = "windows") {
-                "Super+Tab"
-            } else {
-                "Alt+Tab"
-            }
-            .into(),
+            hold_shortcut: "Super+Tab".into(),
             search_shortcut: "Super+Backquote".into(),
             search_entry_key: "Backquote".into(),
             hold_enabled: true,
+            application_enabled: true,
+            application_hold_shortcut: "Alt+Tab".into(),
+            application_search_shortcut: "Alt+Backquote".into(),
+            tabs_enabled: true,
+            tabs_hold_shortcut: "Ctrl+Tab".into(),
+            tabs_search_shortcut: "Ctrl+Backquote".into(),
+            application_hint_keys: vec!["Alt".into()],
+            tabs_hint_keys: vec!["Control".into()],
+            desktops_enabled: true,
+            desktops_hold_shortcut: "Ctrl+Super+Tab".into(),
+            desktops_search_shortcut: "Ctrl+Super+Backquote".into(),
+            windows_hint_keys: vec!["Super".into()],
+            codex_home: String::new(),
             desktop_scope: Scope::All,
             display_scope: Scope::All,
             include_minimized: true,
@@ -189,12 +222,121 @@ impl Shortcut {
 }
 
 impl Config {
+    fn validate_layers(&self) -> Result<(), String> {
+        let mut shortcuts = Vec::new();
+        for (hold_enabled, search_enabled, hold, search) in [
+            (
+                self.hold_enabled,
+                true,
+                &self.hold_shortcut,
+                &self.search_shortcut,
+            ),
+            (
+                self.application_enabled,
+                self.application_enabled,
+                &self.application_hold_shortcut,
+                &self.application_search_shortcut,
+            ),
+            (
+                self.tabs_enabled,
+                self.tabs_enabled,
+                &self.tabs_hold_shortcut,
+                &self.tabs_search_shortcut,
+            ),
+            (
+                self.desktops_enabled,
+                self.desktops_enabled,
+                &self.desktops_hold_shortcut,
+                &self.desktops_search_shortcut,
+            ),
+        ] {
+            let h = Shortcut::parse(hold)?;
+            let s = Shortcut::parse(search)?;
+            if h.modifiers & SHIFT != 0 {
+                return Err("Keep Shift free for reverse cycling".into());
+            }
+            for (enabled, shortcut) in [(hold_enabled, &h), (search_enabled, &s)] {
+                if enabled {
+                    if shortcuts.iter().any(|(key, mods)| {
+                        key == &shortcut.key && *mods == shortcut.modifiers & !SHIFT
+                    }) {
+                        return Err(
+                            "Each navigation layer needs a different shortcut / 各层快捷键不能重复"
+                                .into(),
+                        );
+                    }
+                    shortcuts.push((shortcut.key.clone(), shortcut.modifiers & !SHIFT));
+                }
+            }
+            if h.key == parse_search_entry_key(&self.search_entry_key)?
+                || [0, SHIFT]
+                    .iter()
+                    .any(|m| hint_character(&h.key, *m).is_some_and(|c| self.hint_contains(c)))
+            {
+                return Err("Cycling, search and hint keys must not conflict".into());
+            }
+        }
+        self.validate_continuations()?;
+        if self.codex_home.len() > 4096
+            || self.codex_home.contains('\0')
+            || (!self.codex_home.is_empty() && !Path::new(&self.codex_home).is_absolute())
+        {
+            return Err(
+                "Use an absolute Codex data folder path / Codex 数据目录需要绝对路径".into(),
+            );
+        }
+        Ok(())
+    }
+    fn validate_continuations(&self) -> Result<(), String> {
+        let groups = [
+            (self.hold_enabled, &self.windows_hint_keys),
+            (self.application_enabled, &self.application_hint_keys),
+            (self.tabs_enabled, &self.tabs_hint_keys),
+        ];
+        for (_, keys) in groups {
+            if keys.len() > 64 || keys.iter().any(|key| !crate::hint_keys::valid_binding(key)) {
+                return Err("Invalid continuation key / 后续触发键无效".into());
+            }
+            if keys.iter().collect::<HashSet<_>>().len() != keys.len() {
+                return Err("Duplicate continuation key / 后续触发键重复".into());
+            }
+        }
+        let mut last_keys: Vec<_> = self.screen_buoy.neighbours.keys().cloned().collect();
+        last_keys.push("A".into());
+        for last in last_keys {
+            let mut occupied = HashSet::new();
+            for (enabled, keys) in groups
+                .into_iter()
+                .chain([(self.screen_buoy.enabled, &self.screen_buoy.keys)])
+            {
+                if !enabled {
+                    continue;
+                }
+                // Aliases and fixed keys may overlap within one action. Only different
+                // actions competing for the same physical key are ambiguous.
+                let resolved: HashSet<_> = keys
+                    .iter()
+                    .filter_map(|binding| {
+                        crate::hint_keys::binding_key(binding, &last, &self.screen_buoy.neighbours)
+                    })
+                    .filter(|key| key != &last)
+                    .collect();
+                if resolved.into_iter().any(|key| !occupied.insert(key)) {
+                    return Err(
+                        "Continuation keys conflict / 后续触发键不能重复用于不同动作".into(),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
     pub fn hint_contains(&self, character: char) -> bool {
         self.hint_alphabet.contains(character)
     }
 
     pub fn validate(&self) -> Result<(), String> {
         self.screen_buoy.validate()?;
+        self.validate_layers()?;
         self.hint_style.validate()?;
         if self.panel_opacity > 100 {
             return Err("Panel opacity must be 0–100".into());
@@ -272,9 +414,60 @@ pub fn load(path: &Path) -> Result<Config, String> {
     if !path.exists() {
         return Ok(Config::default());
     }
-    let config: Config = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    let config = migrate(value)?;
     config.validate()?;
+    Ok(config)
+}
+fn migrate(value: serde_json::Value) -> Result<Config, String> {
+    let legacy = value.get("applicationHoldShortcut").is_none();
+    let legacy_bindings = ["windowsHintKeys", "applicationHintKeys", "tabsHintKeys"]
+        .iter()
+        .all(|key| value.get(*key).is_none());
+    let mut config: Config = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    if legacy {
+        // The old macOS default occupied Alt. Free it for the application layer.
+        if config.hold_shortcut == "Alt+Tab" {
+            config.hold_shortcut = "Super+Tab".into();
+        }
+        // Preserve custom shortcuts; newly introduced layers can be enabled after resolving conflicts.
+        let collides = |hold: &str, search: &str| {
+            [&config.hold_shortcut, &config.search_shortcut]
+                .iter()
+                .any(|old| {
+                    let old = Shortcut::parse(old).ok();
+                    [hold, search].iter().any(|new| {
+                        old.as_ref()
+                            .zip(Shortcut::parse(new).ok().as_ref())
+                            .is_some_and(|(old, new)| {
+                                old.key == new.key
+                                    && old.modifiers & !SHIFT == new.modifiers & !SHIFT
+                            })
+                    })
+                })
+        };
+        config.application_enabled = !collides(
+            &config.application_hold_shortcut,
+            &config.application_search_shortcut,
+        );
+        config.tabs_enabled = !collides(&config.tabs_hold_shortcut, &config.tabs_search_shortcut);
+        config.desktops_enabled = !collides(
+            &config.desktops_hold_shortcut,
+            &config.desktops_search_shortcut,
+        );
+    }
+    if legacy_bindings && config.screen_buoy.keys == ["HintRightKey"] {
+        // Upgrade the former default once. Keep custom keys and avoid taking a key
+        // already assigned to another continuation, even while SB is disabled.
+        let mut upgraded = config.clone();
+        upgraded.screen_buoy.keys = crate::hint_keys::ScreenBuoy::default().keys;
+        upgraded.screen_buoy.enabled = true;
+        if upgraded.validate_continuations().is_ok() {
+            config.screen_buoy.keys = upgraded.screen_buoy.keys;
+        }
+    }
     Ok(config)
 }
 pub fn save(path: &Path, config: &Config) -> Result<(), String> {
@@ -294,6 +487,98 @@ pub fn save(path: &Path, config: &Config) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn navigation_defaults_migrate_legacy_alt_without_losing_other_settings() {
+        let old = serde_json::json!({"holdShortcut":"Alt+Tab","panelOpacity":42,"language":"zh","screenBuoy":{"enabled":true,"keys":["HintRightKey"]}});
+        let config = migrate(old).unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.hold_shortcut, "Super+Tab");
+        assert_eq!(config.application_hold_shortcut, "Alt+Tab");
+        assert_eq!(config.panel_opacity, 42);
+        assert!(config.screen_buoy.enabled);
+        let custom = migrate(serde_json::json!({"holdShortcut":"Ctrl+Tab"})).unwrap();
+        custom.validate().unwrap();
+        assert_eq!(custom.hold_shortcut, "Ctrl+Tab");
+        assert!(!custom.tabs_enabled);
+        let reverse = migrate(serde_json::json!({"searchShortcut":"Ctrl+Shift+Tab"})).unwrap();
+        reverse.validate().unwrap();
+        assert!(!reverse.tabs_enabled);
+    }
+    #[test]
+    fn layer_and_continuation_conflicts_are_rejected_before_saving() {
+        let mut config = Config::default();
+        config.validate().unwrap();
+        config.hold_enabled = false;
+        config.search_shortcut = "Alt+Tab".into();
+        assert!(config.validate().is_err()); // Window search is always enabled.
+        config = Config::default();
+        config.tabs_hint_keys = vec!["Alt".into()];
+        assert!(config.validate().is_err());
+        config.tabs_hint_keys = vec!["HintRightKey".into()];
+        config.screen_buoy.enabled = true;
+        assert!(config.validate().is_err());
+        config.tabs_hint_keys = vec!["Control".into()];
+        config.windows_hint_keys = vec!["Control".into()];
+        assert!(config.validate().is_err());
+        config.windows_hint_keys = vec!["Super".into()];
+        config.tabs_hold_shortcut = "Alt+Tab".into();
+        assert!(config.validate().is_err());
+        config.tabs_hold_shortcut = "Ctrl+Tab".into();
+        config.validate().unwrap();
+    }
+    #[test]
+    fn continuation_binding_migration_preserves_custom_settings_and_saves_arrays() {
+        let old = serde_json::json!({
+            "applicationHoldShortcut":"Alt+Tab", "windowsHintKey":"Super",
+            "applicationHintKey":"Alt", "tabsHintKey":"Enter",
+            "screenBuoy":{"enabled":true,"keys":["HintRightKey"]}
+        });
+        let config = migrate(old.clone()).unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.tabs_hint_keys, ["Enter"]);
+        assert_eq!(config.screen_buoy.keys, ["HintLeftKey", "HintRightKey"]);
+        let saved = serde_json::to_value(&config).unwrap();
+        assert_eq!(saved["tabsHintKeys"], serde_json::json!(["Enter"]));
+        for key in ["windowsHintKey", "applicationHintKey", "tabsHintKey"] {
+            assert!(saved.get(key).is_none());
+        }
+        let mut restored = migrate(saved).unwrap();
+        restored.screen_buoy.keys = vec!["HintRightKey".into()];
+        let restored = migrate(serde_json::to_value(restored).unwrap()).unwrap();
+        assert_eq!(restored.screen_buoy.keys, ["HintRightKey"]);
+        for keys in [vec!["Enter"], vec!["HintLeftKey", "Enter"], vec![]] {
+            let mut custom = old.clone();
+            custom["screenBuoy"] = serde_json::json!({"enabled":false,"keys":keys});
+            assert_eq!(migrate(custom).unwrap().screen_buoy.keys, keys);
+        }
+        let mut conflict = old;
+        conflict["tabsHintKey"] = "HintLeftKey".into();
+        let config = migrate(conflict).unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.tabs_hint_keys, ["HintLeftKey"]);
+        assert_eq!(config.screen_buoy.keys, ["HintRightKey"]);
+    }
+    #[test]
+    fn multiple_continuation_keys_share_one_action_but_not_competing_actions() {
+        let mut config = Config::default();
+        config.tabs_hint_keys = vec!["Control".into(), "Enter".into()];
+        config.screen_buoy.enabled = true;
+        config.screen_buoy.keys.push("H".into()); // Also J's left neighbour.
+        config.validate().unwrap();
+        let restored = migrate(serde_json::to_value(&config).unwrap()).unwrap();
+        assert_eq!(restored.tabs_hint_keys, ["Control", "Enter"]);
+        config.windows_hint_keys.push("Enter".into());
+        assert!(config.validate().unwrap_err().contains("conflict"));
+        config.windows_hint_keys.pop();
+        config.tabs_hint_keys.push("Control".into());
+        assert!(config.validate().unwrap_err().contains("Duplicate"));
+        config.tabs_hint_keys = vec!["H".into()];
+        config.screen_buoy.keys.pop();
+        assert!(config.validate().unwrap_err().contains("conflict"));
+        config.tabs_hint_keys.clear();
+        config.validate().unwrap(); // Disable continuation without disabling Ctrl+Tab.
+        assert!(config.tabs_enabled);
+    }
     #[test]
     fn flexible_characters_reject_unreachable_or_ambiguous_keys() {
         let mut config = Config::default();

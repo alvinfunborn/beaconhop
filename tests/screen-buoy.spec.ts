@@ -20,6 +20,8 @@ test("old installation offers update without starting it, with an explicit path 
   await page.goto("/?preview=1&sb=old");
   await page.getByRole("button", { name: "Screen Buoy", exact: true }).click();
   await expect(page.getByText(/this version needs an integration update/)).toBeVisible();
+  await expect(page.getByText(/version mismatch; its permissions have not been checked/)).toBeVisible();
+  await expect(page.getByText(/Enable it for the SB application/)).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Check connection and permissions" })).toBeDisabled();
   await page.getByText("Installed somewhere else?", { exact: true }).click();
   await page.getByLabel("Screen Buoy application path", { exact: true }).fill("/Custom/ScreenBuoy.app");
@@ -33,7 +35,7 @@ test("SB owns its permissions and connection check does not claim successful win
   await page.goto("/?preview=1&sb=permissions");
   await page.getByRole("button", { name: "Screen Buoy", exact: true }).click();
   await page.getByRole("button", { name: "Check connection and permissions" }).click();
-  await expect(page.getByText(/Connected, but setup is incomplete/)).toBeVisible();
+  await expect(page.getByText(/Connected; Accessibility access is missing/)).toBeVisible();
   await expect(page.getByText("Accessibility: Not granted", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Open Screen Buoy settings", exact: true }).click();
   await expect(page.getByText(/Screen Buoy settings opened/)).toBeVisible();
@@ -48,8 +50,11 @@ test("left right and fixed keys round trip without removing hint characters", as
     await api.call("save_settings", { config });
   });
   await page.getByRole("button", { name: "Screen Buoy", exact: true }).click();
+  await expect(page.getByText("Not checked", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Enable it for the SB application/)).toHaveCount(0);
   await page.getByRole("switch", { name: "Enable Screen Buoy integration" }).click();
-  await page.getByLabel("HintLeftKey · Left neighbour").check();
+  await expect(page.getByLabel("HintLeftKey · Left neighbour")).toBeChecked();
+  await expect(page.getByLabel("HintRightKey · Right neighbour")).toBeChecked();
   await page.getByRole("button", { name: "Add key", exact: true }).click();
   await page.getByText("Left / right mapping for the current hint alphabet", { exact: true }).click();
   await expect(page.getByLabel("/ left", { exact: true })).toHaveValue(".");
@@ -61,10 +66,27 @@ test("left right and fixed keys round trip without removing hint characters", as
   expect(config.screenBuoy.neighbours.Space.right).toBe("ArrowRight");
   await page.getByRole("button", { name: "Check connection and permissions" }).click();
   await expect(page.getByText("Permissions and keyboard input are ready.")).toBeVisible();
+  await expect(page.getByText(/Enable it for the SB application/)).toHaveCount(0);
+  await page.getByRole("button", { name: "Open Screen Buoy settings", exact: true }).click();
+  await expect(page.getByText("Screen Buoy settings opened.", { exact: true })).toBeVisible();
   await page.setViewportSize({ width: 820, height: 640 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.getByRole("switch", { name: "Enable Screen Buoy integration" }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: "logs/screen-buoy-setup.png" });
+});
+
+test("an unavailable listener does not ask to grant existing Accessibility again", async ({ page }) => {
+  await page.route("**/src/api.ts", async route => {
+    const response = await route.fetch();
+    const body = (await response.text()).replace('keyboardHook: !location.search.includes("sb=permissions"), ready: !location.search.includes("sb=permissions")', 'keyboardHook: false, ready: false');
+    await route.fulfill({ response, body });
+  });
+  await page.goto("/?preview=1&sb=ready");
+  await page.getByRole("button", { name: "Screen Buoy", exact: true }).click();
+  await page.getByRole("button", { name: "Check connection and permissions" }).click();
+  await expect(page.getByText(/Connected; the keyboard listener is not ready/)).toBeVisible();
+  await expect(page.getByText(/Enable it for the SB application/)).toHaveCount(0);
+  await expect(page.getByText(/Accessibility is granted, but/)).toBeVisible();
 });
 
 test("failed release lookup stays retryable and shows an error", async ({ page }) => {

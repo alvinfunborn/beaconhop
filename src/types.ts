@@ -8,6 +8,19 @@ export type Config = {
   searchShortcut: string;
   searchEntryKey: string;
   holdEnabled: boolean;
+  applicationEnabled: boolean;
+  applicationHoldShortcut: string;
+  applicationSearchShortcut: string;
+  tabsEnabled: boolean;
+  tabsHoldShortcut: string;
+  tabsSearchShortcut: string;
+  desktopsEnabled: boolean;
+  desktopsHoldShortcut: string;
+  desktopsSearchShortcut: string;
+  windowsHintKeys: string[];
+  applicationHintKeys: string[];
+  tabsHintKeys: string[];
+  codexHome: string;
   desktopScope: "current" | "all";
   displayScope: "current" | "all";
   includeMinimized: boolean;
@@ -29,6 +42,7 @@ export type ScreenBuoyConfig = {
   keys: string[];
   neighbours: Record<string, { left: string | null; right: string | null }>;
 };
+export type ContentPresentation = "thumbnails" | "text";
 export type Destination = {
   id: string;
   nativeId: number;
@@ -45,18 +59,42 @@ export type Destination = {
   bounds: { x: number; y: number; width: number; height: number };
   icon: string | null;
   hint: string;
+  desktopTarget?: boolean;
+  desktopLabel?: { number: number; fullScreen: boolean } | null;
+  content?: {provider: string; instance: string; context: string; item: string; parentId: string; subtitle: string; active: boolean; preview?: boolean; presentation?: ContentPresentation; description?: string} | null;
+};
+export type NativeDesktop = {
+  id:string; name:string; displayId:string; displayIds:string[]; current:boolean;
+  label?: {number:number; fullScreen:boolean} | null;
 };
 export type Session = {
+  desktops?: NativeDesktop[];
+  overview?: OverviewPanel[];
+  spatialIds?: string[];
   sessionId: number;
   revision: number;
   mode: "inactive" | "held" | "search";
+  layer: "windows" | "application" | "tabs" | "desktops";
+  sticky: boolean;
+  loading: boolean;
   windows: Destination[];
+  desktopPreviews?: Record<string, DesktopPreview>;
   resultIds: string[];
   selected: string | null;
   prefix: string;
   query: string;
   error: string | null;
   warnings: string[];
+};
+export type OverviewPanel = {
+  label: string;
+  display: { id: string; name: string; bounds: Destination["bounds"]; scale: number };
+  bounds: Destination["bounds"];
+  slots: (string | null)[];
+};
+export type DesktopPreview = {
+  displays: {id: string; bounds: Destination["bounds"]}[];
+  windows: Omit<Destination, "hint">[];
 };
 export type Permissions = {
   required: boolean;

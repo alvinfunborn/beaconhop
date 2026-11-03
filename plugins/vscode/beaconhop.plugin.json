@@ -1,0 +1,9 @@
+{
+  "protocol": 1,
+  "id": "vscode",
+  "name": "VS Code",
+  "version": "0.2.0",
+  "description": "Text, diff and notebook editors across editor groups",
+  "appIds": ["com.microsoft.VSCode", "com.microsoft.VSCodeInsiders", "code.exe", "code - insiders.exe"],
+  "capabilities": []
+}

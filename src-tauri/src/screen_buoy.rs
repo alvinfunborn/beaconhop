@@ -15,12 +15,42 @@ use tauri::Manager;
 #[serde(rename_all = "camelCase")]
 struct Request {
     version: u8,
-    pid: u32,
-    native_id: u64,
+    target: Option<Target>,
     port: u16,
     token: String,
     action: String,
     held_keys: Vec<u32>,
+}
+#[derive(Serialize)]
+#[serde(
+    tag = "scope",
+    rename_all = "lowercase",
+    rename_all_fields = "camelCase"
+)]
+enum Target {
+    Window {
+        pid: u32,
+        native_id: u64,
+    },
+    Desktop {
+        desktop_id: String,
+        display_id: String,
+    },
+}
+impl From<&Destination> for Target {
+    fn from(target: &Destination) -> Self {
+        if target.desktop_target {
+            Self::Desktop {
+                desktop_id: target.desktop_id.clone(),
+                display_id: target.display_id.clone(),
+            }
+        } else {
+            Self::Window {
+                pid: target.pid,
+                native_id: target.native_id,
+            }
+        }
+    }
 }
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Reply {
@@ -48,7 +78,7 @@ fn compatible(path: &Path) -> bool {
         .ok()
         .filter(|v| v.len() < 4096)
         .and_then(|v| serde_json::from_slice::<serde_json::Value>(&v).ok())
-        .is_some_and(|v| v["protocol"] == 2)
+        .is_some_and(|v| v["protocol"] == 3)
 }
 
 #[derive(Serialize)]
@@ -193,7 +223,7 @@ fn acknowledge(
     if let Some(error) = hello.error {
         return Err(error);
     }
-    if hello.protocol != 2 {
+    if hello.protocol != 3 {
         return Err("Incompatible Screen Buoy protocol".into());
     }
     if !current() {
@@ -201,7 +231,7 @@ fn acknowledge(
     }
     stream.write_all(b"begin\n").map_err(|e| e.to_string())?;
     let reply: Reply = serde_json::from_str(&line(stream)?).map_err(|e| e.to_string())?;
-    if reply.token != token || reply.protocol != 2 {
+    if reply.token != token || reply.protocol != 3 {
         return Err("Invalid Screen Buoy acknowledgement".into());
     }
     if let Some(error) = reply.error {
@@ -217,6 +247,24 @@ pub fn handoff(
     current: impl Fn() -> bool,
 ) -> Result<(), String> {
     exchange(path, Some(target), held_keys, "hints", current).map(|_| ())
+}
+
+pub fn target_is_current(
+    target: &Destination,
+    snapshot: &crate::model::Snapshot,
+    focused: Option<&str>,
+) -> bool {
+    if target.desktop_target {
+        snapshot
+            .desktops
+            .iter()
+            .any(|d| d.id == target.desktop_id && d.display_id == target.display_id && d.current)
+    } else {
+        focused == Some(target.id.as_str())
+            && snapshot.windows.iter().any(|w| {
+                w.id == target.id && w.pid == target.pid && w.native_id == target.native_id
+            })
+    }
 }
 
 fn launch_command(path: &Path) -> Command {
@@ -257,9 +305,8 @@ fn exchange(
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let token = uuid::Uuid::new_v4().to_string();
     let request = Request {
-        version: 2,
-        pid: target.map_or(0, |t| t.pid),
-        native_id: target.map_or(0, |t| t.native_id),
+        version: 3,
+        target: target.map(Target::from),
         port: listener.local_addr().map_err(|e| e.to_string())?.port(),
         token: token.clone(),
         action: action.into(),
@@ -370,7 +417,7 @@ pub async fn get_screen_buoy_download() -> Result<Download, String> {
             return Err("Invalid Screen Buoy release manifest".into());
         }
         serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|e| e.to_string())?["protocol"]
-            == 2
+            == 3
     };
     if supported {
         client
@@ -409,6 +456,48 @@ pub fn open_screen_buoy_download(tag: Option<String>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn desktop_handoff_preserves_scope_without_a_focused_window() {
+        use crate::model::{Desktop, Snapshot};
+        let mut snapshot = Snapshot {
+            desktops: vec![Desktop {
+                id: "d".into(),
+                display_id: "m".into(),
+                current: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let target = Destination {
+            desktop_target: true,
+            desktop_id: "d".into(),
+            display_id: "m".into(),
+            ..Default::default()
+        };
+        assert!(target_is_current(&target, &snapshot, None));
+        assert!(target_is_current(&target, &snapshot, Some("any-window")));
+        assert_eq!(
+            serde_json::to_value(Target::from(&target)).unwrap(),
+            serde_json::json!({"scope":"desktop","desktopId":"d","displayId":"m"})
+        );
+        snapshot.desktops[0].current = false;
+        assert!(!target_is_current(&target, &snapshot, None));
+        snapshot.desktops.clear();
+        assert!(!target_is_current(&target, &snapshot, None));
+        let window = Destination {
+            id: "window".into(),
+            pid: 23,
+            native_id: 42,
+            ..Default::default()
+        };
+        snapshot.windows.push(window.clone());
+        assert!(target_is_current(&window, &snapshot, Some("window")));
+        assert!(!target_is_current(&window, &snapshot, None));
+        assert_eq!(
+            serde_json::to_value(Target::from(&window)).unwrap(),
+            serde_json::json!({"scope":"window","pid":23,"nativeId":42})
+        );
+    }
     #[cfg(target_os = "macos")]
     #[test]
     fn bundled_requests_launch_in_background_and_deliver_arguments_to_a_new_instance() {
@@ -447,7 +536,7 @@ mod tests {
                 } else {
                     "expected"
                 };
-                let hello = serde_json::json!({ "token": token, "error": null, "version": "1.4.3", "protocol": 2, "permissions": { "ready": true } });
+                let hello = serde_json::json!({ "token": token, "error": null, "version": "1.4.3", "protocol": 3, "permissions": { "ready": true } });
                 writeln!(stream, "{hello}").unwrap();
                 if scenario == "wrong-token" || scenario == "cancelled" {
                     let mut byte = [0];
@@ -498,6 +587,8 @@ mod tests {
         std::fs::write(dir.join(MARKER), r#"{"protocol":1}"#).unwrap();
         assert!(!compatible(&binary));
         std::fs::write(dir.join(MARKER), r#"{"protocol":2}"#).unwrap();
+        assert!(!compatible(&binary));
+        std::fs::write(dir.join(MARKER), r#"{"protocol":3}"#).unwrap();
         assert!(compatible(&binary));
         std::fs::remove_dir_all(dir).unwrap();
         assert!(download_url("v1.5.0")

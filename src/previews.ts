@@ -13,13 +13,28 @@ async function decoded(images: Record<string, string>) {
 export function usePreviews(session: Session | undefined, enabled: boolean) {
   const [images, setImages] = useState<Record<string, string>>({});
   const active = session?.mode !== "inactive";
-  const targets = useRef(session?.windows ?? []);
-  targets.current = session?.windows ?? [];
+  const targets = useRef<string[]>([]);
+  targets.current = session?.layer === "desktops"
+    ? [...new Set(Object.values(session.desktopPreviews ?? {}).flatMap(p => p.windows.map(w => w.id)))]
+    : session?.windows.map(w => w.id) ?? [];
   useEffect(() => {
     if (!enabled) { setImages({}); return; }
-    if (!session || !active) return;
+    if (!session || !active || session.loading) return;
     let alive = true;
-    const args = { ids: targets.current.map(w => w.id), sessionId: session.sessionId };
+    if (session.layer === "tabs") {
+      setImages({});
+      // Inventory contains only availability flags. Fetch bounded cached batches
+      // after the async tab list arrives; no capture is on the shortcut path.
+      const ids = session.windows.filter(w => w.content?.preview).slice(0, 100).map(w => w.id);
+      void (async () => {
+        for (let i = 0; alive && i < ids.length; i += 8) {
+          const data = await call<Record<string, string>>("get_tab_thumbnails", {ids: ids.slice(i, i + 8), sessionId: session.sessionId}).then(decoded);
+          if (alive) setImages(old => ({...old, ...data}));
+        }
+      })().catch(() => {});
+      return () => { alive = false; };
+    }
+    const args = { ids: targets.current, sessionId: session.sessionId };
     // Native cache can be warm even on the first invocation of this WebView.
     // This read remains independent of a slow refresh already in progress.
     const cached = call<Record<string,string>>("get_cached_thumbnails", args).then(decoded);
@@ -28,6 +43,6 @@ export function usePreviews(session: Session | undefined, enabled: boolean) {
     cached.then(data => { if (alive && !refreshed) setImages(data); }).catch(() => {});
     fresh.then(data => { if (alive) { refreshed = true; setImages(data); } }).catch(() => {});
     return () => {alive = false;};
-  }, [session?.sessionId, active, enabled]);
+  }, [session?.sessionId, session?.loading, session?.layer, active, enabled]);
   return images;
 }

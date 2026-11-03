@@ -17,10 +17,13 @@ pub struct KeyEvent {
 pub enum Action {
     Record(String),
     Publish,
+    PrepareDisplays(Vec<Display>),
     Show,
     Search,
     Activate(u64, Destination),
     ScreenBuoy(u64, Destination, Vec<u32>),
+    LoadTabs(u64, Destination),
+    Continue(u64, Destination, Layer),
     Cancel(u64, Option<Destination>),
 }
 #[derive(Default)]
@@ -28,11 +31,18 @@ pub struct Response {
     pub consumed: bool,
     pub actions: Vec<Action>,
 }
+#[derive(Clone, Copy, PartialEq)]
+enum Continuation {
+    Windows,
+    Application,
+    Tabs,
+    ScreenBuoy,
+}
 struct HintExtension {
     target: Destination,
     key: String,
     code: u32,
-    requested: bool,
+    requested: Option<Continuation>,
 }
 pub struct Engine {
     pub config: Config,
@@ -41,18 +51,30 @@ pub struct Engine {
     pub mru: Vec<String>,
     consumed: HashSet<u32>,
     pressed_keys: HashSet<u32>,
+    continuation_keys: HashSet<u32>,
+    continuation_modifiers: u8,
+    continuation_pending: bool,
     drain_modifiers: u8,
     serial: u64,
     pending_focus: Option<(u64, String)>,
     hint_extension: Option<HintExtension>,
     pub sb_pending: bool,
+    pub tab_apps: HashSet<String>,
+    tab_hints: HashMap<String, crate::stable_hints::StableHints>,
+    tab_mru: Vec<String>,
+    load_delta: isize,
+    commit_on_load: bool,
+    desktop_hints: crate::stable_hints::StableHints,
+    desktop_mru: Vec<String>,
     search_index: HashMap<String, crate::search::SearchText>,
     pub hints: crate::stable_hints::StableHints,
     pub navigation: HashMap<String, Bounds>,
+    pub overview: crate::overview::StableOverview,
 }
 impl Engine {
     pub fn clear_extension(&mut self) {
         self.hint_extension = None;
+        self.continuation_pending = false;
         self.sb_pending = false;
     }
     pub fn new(config: Config) -> Self {
@@ -63,14 +85,25 @@ impl Engine {
             mru: vec![],
             consumed: HashSet::new(),
             pressed_keys: HashSet::new(),
+            continuation_keys: HashSet::new(),
+            continuation_modifiers: 0,
+            continuation_pending: false,
             drain_modifiers: 0,
             serial: 0,
             pending_focus: None,
             hint_extension: None,
             sb_pending: false,
+            tab_apps: HashSet::new(),
+            tab_hints: HashMap::new(),
+            tab_mru: Vec::new(),
+            load_delta: 0,
+            commit_on_load: false,
+            desktop_hints: Default::default(),
+            desktop_mru: Vec::new(),
             search_index: HashMap::new(),
             hints: Default::default(),
             navigation: HashMap::new(),
+            overview: Default::default(),
         }
     }
     pub fn observe_focus(&mut self, id: Option<String>) {
@@ -89,12 +122,25 @@ impl Engine {
         }
         self.snapshot.focused_id = id;
     }
+    /// A nonactivating panel must not keep intercepting input after the user changes windows.
+    pub fn observe_native_focus(&mut self, id: Option<String>) -> Vec<Action> {
+        if self.session.mode != Mode::Inactive
+            && (self.session.loading || (self.session.mode == Mode::Held && self.session.sticky))
+            && id.is_some()
+            && id.as_ref() != self.session.origin.as_ref().map(|w| &w.id)
+        {
+            let actions = self.dismiss();
+            self.observe_focus(id);
+            return actions;
+        }
+        self.observe_focus(id);
+        vec![]
+    }
     pub fn finish_activation(&mut self, session_id: u64, focused: Option<String>) {
         if self.session.session_id == session_id
-            && self
-                .hint_extension
-                .as_ref()
-                .is_some_and(|h| focused.as_ref() != Some(&h.target.id))
+            && self.hint_extension.as_ref().is_some_and(|h| {
+                focused.as_ref() != Some(&h.target.native_target().id) && !h.target.desktop_target
+            })
         {
             self.hint_extension = None;
             self.sb_pending = false;
@@ -111,6 +157,22 @@ impl Engine {
         self.observe_focus(focused);
     }
     pub fn update(&mut self, snapshot: Snapshot) {
+        self.overview.retain_displays(&snapshot.displays);
+        // Only confirmed Space transitions change desktop recency. Repeated polls
+        // and activation requests (which can fail) must not rewrite this history.
+        self.desktop_mru
+            .retain(|id| snapshot.desktops.iter().any(|d| &d.id == id));
+        for desktop in snapshot.desktops.iter().filter(|d| d.current) {
+            if !self
+                .snapshot
+                .desktops
+                .iter()
+                .any(|old| old.id == desktop.id && old.current)
+            {
+                self.desktop_mru.retain(|id| id != &desktop.id);
+                self.desktop_mru.insert(0, desktop.id.clone());
+            }
+        }
         self.observe_focus(snapshot.focused_id.clone());
         let live: HashSet<_> = snapshot.windows.iter().map(|w| &w.id).collect();
         self.mru.retain(|id| live.contains(id));
@@ -137,19 +199,203 @@ impl Engine {
         self.snapshot = snapshot;
     }
     pub fn open(&mut self, mode: Mode, reverse: bool) -> Vec<Action> {
-        self.hint_extension = None;
-        self.sb_pending = false;
-        self.serial += 1;
-        let origin = self
-            .pending_focus
+        self.open_layer(Layer::Windows, mode, reverse, false, None)
+    }
+    pub fn focused_window(&self) -> Option<Destination> {
+        self.pending_focus
             .as_ref()
             .map(|(_, id)| id)
             .or(self.snapshot.focused_id.as_ref())
             .and_then(|id| self.snapshot.windows.iter().find(|w| &w.id == id))
-            .cloned();
+            .cloned()
+    }
+    pub fn supports_tabs(&self, target: &Destination) -> bool {
+        self.config.tabs_enabled
+            && self
+                .tab_apps
+                .contains(&crate::plugins::app_key(&target.app_id))
+    }
+    fn shortcut_layer(&self, event: &KeyEvent) -> Option<(Layer, Mode)> {
+        let origin = if self.session.mode == Mode::Inactive {
+            self.focused_window()
+        } else {
+            self.session.origin.clone()
+        };
+        for (layer, enabled, hold, search) in [
+            (
+                Layer::Desktops,
+                self.config.desktops_enabled && !self.snapshot.desktops.is_empty(),
+                &self.config.desktops_hold_shortcut,
+                &self.config.desktops_search_shortcut,
+            ),
+            (
+                Layer::Windows,
+                self.config.hold_enabled,
+                &self.config.hold_shortcut,
+                &self.config.search_shortcut,
+            ),
+            (
+                Layer::Application,
+                self.config.application_enabled && origin.is_some(),
+                &self.config.application_hold_shortcut,
+                &self.config.application_search_shortcut,
+            ),
+            (
+                Layer::Tabs,
+                origin.as_ref().is_some_and(|o| self.supports_tabs(o)),
+                &self.config.tabs_hold_shortcut,
+                &self.config.tabs_search_shortcut,
+            ),
+        ] {
+            if !enabled {
+                continue;
+            }
+            if !event.repeat
+                && Shortcut::parse(search)
+                    .unwrap()
+                    .matches(&event.key, event.modifiers, false)
+            {
+                return Some((layer, Mode::Search));
+            }
+            if Shortcut::parse(hold)
+                .unwrap()
+                .matches(&event.key, event.modifiers, true)
+            {
+                return Some((layer, Mode::Held));
+            }
+        }
+        // The all-window search remains available when hold-to-switch is disabled.
+        if !event.repeat
+            && Shortcut::parse(&self.config.search_shortcut)
+                .unwrap()
+                .matches(&event.key, event.modifiers, false)
+        {
+            return Some((Layer::Windows, Mode::Search));
+        }
+        None
+    }
+    pub fn tabs_loaded(
+        &mut self,
+        session_id: u64,
+        result: Result<Vec<Destination>, String>,
+    ) -> Vec<Action> {
+        if self.session.session_id != session_id
+            || self.session.mode == Mode::Inactive
+            || !self.session.loading
+        {
+            return vec![];
+        }
+        self.session.loading = false;
+        self.session.revision += 1;
+        match result {
+            Err(error) => {
+                self.session.error = Some(error);
+                self.session.mode = Mode::Search;
+                self.clear_extension();
+            }
+            Ok(mut items) => {
+                let ranks: HashMap<_, _> = self
+                    .tab_mru
+                    .iter()
+                    .enumerate()
+                    .map(|(i, id)| (id, i))
+                    .collect();
+                items.sort_by_key(|w| ranks.get(&w.id).copied().unwrap_or(usize::MAX));
+                let context = items
+                    .first()
+                    .and_then(|w| w.content.as_ref())
+                    .map(|c| format!("{}:{}:{}", c.provider, c.instance, c.context))
+                    .unwrap_or_default();
+                if self.tab_hints.len() > 128 && !self.tab_hints.contains_key(&context) {
+                    self.tab_hints.clear();
+                }
+                let hints = self.tab_hints.entry(context).or_default();
+                hints.sync(
+                    &self.config,
+                    &items.iter().map(|w| w.id.clone()).collect::<Vec<_>>(),
+                );
+                let active = items
+                    .iter()
+                    .position(|w| w.content.as_ref().is_some_and(|c| c.active));
+                let delta = if self.session.mode == Mode::Held && !self.session.sticky {
+                    self.load_delta
+                } else {
+                    0
+                };
+                self.session.selected = if items.is_empty() {
+                    None
+                } else {
+                    Some(
+                        items[(active
+                            .map(|i| i as isize)
+                            .unwrap_or(if delta > 0 { -1 } else { 0 })
+                            + delta)
+                            .rem_euclid(items.len() as isize)
+                            as usize]
+                            .id
+                            .clone(),
+                    )
+                };
+                self.session.windows = items
+                    .into_iter()
+                    .map(|window| HintWindow {
+                        hint: hints.get(&window.id),
+                        window,
+                    })
+                    .collect();
+                if self.commit_on_load {
+                    return self.activate(None);
+                }
+            }
+        }
+        vec![Action::Show, Action::Publish]
+    }
+    pub fn continue_layer(
+        &mut self,
+        session_id: u64,
+        target: Destination,
+        layer: Layer,
+    ) -> Vec<Action> {
+        if !self.continuation_pending
+            || self.session.session_id != session_id
+            || self.session.mode != Mode::Inactive
+        {
+            return vec![];
+        }
+        self.open_layer(layer, Mode::Held, false, true, Some(target))
+    }
+    pub fn open_layer(
+        &mut self,
+        layer: Layer,
+        mode: Mode,
+        reverse: bool,
+        sticky: bool,
+        target: Option<Destination>,
+    ) -> Vec<Action> {
+        self.clear_extension();
+        self.serial += 1;
+        let desktop_filter = target
+            .as_ref()
+            .filter(|t| t.desktop_target)
+            .map(|t| t.desktop_id.clone());
+        let desktop_display = target
+            .as_ref()
+            .filter(|t| t.desktop_target && !t.display_id.is_empty())
+            .map(|t| t.display_id.clone());
+        let origin = target
+            .filter(|t| !t.desktop_target)
+            .or_else(|| self.focused_window())
+            .filter(|w| {
+                desktop_filter
+                    .as_ref()
+                    .is_none_or(|id| &w.desktop_id == id && w.current_desktop == Some(true))
+            });
+        self.load_delta = if reverse { -1 } else { 1 };
+        self.commit_on_load = false;
         let current = origin
             .as_ref()
             .map(|w| w.display_id.as_str())
+            .or(desktop_display.as_deref())
             .unwrap_or(&self.snapshot.current_display);
         let excluded: HashSet<_> = self
             .config
@@ -162,7 +408,11 @@ impl Engine {
             .windows
             .iter()
             .filter(|w| {
-                (self.config.desktop_scope == Scope::All || w.current_desktop == Some(true))
+                !matches!(layer, Layer::Tabs | Layer::Desktops)
+                    && desktop_filter.as_ref().is_none_or(|id| &w.desktop_id == id)
+                    && (layer != Layer::Application
+                        || origin.as_ref().is_some_and(|o| same_application(o, w)))
+                    && (self.config.desktop_scope == Scope::All || w.current_desktop == Some(true))
                     && (self.config.display_scope == Scope::All || w.display_id == current)
                     && (self.config.include_minimized || !w.minimized)
                     && (self.config.include_hidden || !w.hidden)
@@ -171,8 +421,49 @@ impl Engine {
             })
             .cloned()
             .collect();
+        let spatial_ids = windows
+            .iter()
+            .filter(|w| !w.minimized && !w.hidden && w.current_desktop == Some(true))
+            .map(|w| w.id.clone())
+            .collect();
         let ranks: HashMap<_, _> = self.mru.iter().enumerate().map(|(i, id)| (id, i)).collect();
         windows.sort_by_key(|w| ranks.get(&w.id).copied().unwrap_or(usize::MAX));
+        let display = self
+            .snapshot
+            .displays
+            .iter()
+            .find(|d| d.id == current)
+            .or_else(|| self.snapshot.displays.first())
+            .cloned();
+        let overview = if layer == Layer::Windows {
+            let displays: Vec<_> = self
+                .snapshot
+                .displays
+                .iter()
+                .filter(|d| {
+                    self.config.display_scope == Scope::All
+                        || display.as_ref().is_some_and(|anchor| anchor.id == d.id)
+                })
+                .cloned()
+                .collect();
+            let panels = self.overview.prepare(
+                &displays,
+                &windows,
+                display.as_ref().map_or("", |d| d.id.as_str()),
+            );
+            if !panels.is_empty() {
+                let order: HashMap<_, _> = panels
+                    .iter()
+                    .flat_map(|p| p.slots.iter().flatten())
+                    .enumerate()
+                    .map(|(i, id)| (id, i))
+                    .collect();
+                windows.sort_by_key(|w| order.get(&w.id).copied().unwrap_or(usize::MAX));
+            }
+            panels
+        } else {
+            vec![]
+        };
         self.hints.sync(
             &self.config,
             &self
@@ -183,20 +474,132 @@ impl Engine {
                 .collect::<Vec<_>>(),
         );
         self.navigation.clear();
+        let mut desktop_previews = HashMap::new();
+        if layer == Layer::Desktops {
+            for desktop in &self.snapshot.desktops {
+                desktop_previews.insert(
+                    format!("desktop:{}", desktop.id),
+                    DesktopPreview {
+                        displays: self
+                            .snapshot
+                            .displays
+                            .iter()
+                            .filter(|d| {
+                                if desktop.display_ids.is_empty() {
+                                    desktop.display_id.is_empty() || d.id == desktop.display_id
+                                } else {
+                                    desktop.display_ids.contains(&d.id)
+                                }
+                            })
+                            .cloned()
+                            .collect(),
+                        windows: self
+                            .snapshot
+                            .windows
+                            .iter()
+                            .filter(|w| {
+                                w.desktop_id == desktop.id
+                                    && !w.minimized
+                                    && !w.hidden
+                                    && !excluded.contains(&w.app_name.to_lowercase())
+                                    && !excluded.contains(&w.app_id.to_lowercase())
+                            })
+                            .cloned()
+                            .collect(),
+                    },
+                );
+            }
+            windows = self
+                .snapshot
+                .desktops
+                .iter()
+                .map(|d| Destination {
+                    id: format!("desktop:{}", d.id),
+                    desktop_id: d.id.clone(),
+                    title: d.name.clone(),
+                    app_name: "Desktop".into(),
+                    display_id: d.display_id.clone(),
+                    current_desktop: Some(d.current),
+                    desktop_target: true,
+                    desktop_label: d.label.clone(),
+                    ..Destination::default()
+                })
+                .collect();
+            self.desktop_hints.sync(
+                &self.config,
+                &windows.iter().map(|w| w.id.clone()).collect::<Vec<_>>(),
+            );
+        }
         let items: Vec<_> = windows
             .into_iter()
             .map(|window| {
-                let hint = self.hints.get(&window.id);
+                let hint = if layer == Layer::Desktops {
+                    self.desktop_hints.get(&window.id)
+                } else {
+                    self.hints.get(&window.id)
+                };
                 HintWindow { window, hint }
             })
             .collect();
         let selected = if items.is_empty() {
             None
+        } else if layer == Layer::Desktops && mode == Mode::Held {
+            let current = items
+                .iter()
+                .position(|w| {
+                    w.window.current_desktop == Some(true)
+                        && self.snapshot.desktops.iter().any(|d| {
+                            d.id == w.window.desktop_id
+                                && (d.display_id.is_empty()
+                                    || d.display_id == current
+                                    || d.display_ids.iter().any(|id| id == current))
+                        })
+                })
+                .or_else(|| {
+                    items
+                        .iter()
+                        .position(|w| w.window.current_desktop == Some(true))
+                })
+                .unwrap_or(0);
+            // Keep overview positions and hints stable; use recency for the first
+            // forward selection, then Tab/Shift+Tab continue in overview order.
+            let recent = (!reverse)
+                .then(|| {
+                    self.desktop_mru.iter().find_map(|id| {
+                        items.iter().position(|w| {
+                            &w.window.desktop_id == id && w.window.current_desktop != Some(true)
+                        })
+                    })
+                })
+                .flatten();
+            let index = recent.unwrap_or_else(|| {
+                (current as isize + if reverse { -1 } else { 1 }).rem_euclid(items.len() as isize)
+                    as usize
+            });
+            Some(items[index].window.id.clone())
+        } else if !overview.is_empty() {
+            let origin_id = origin.as_ref().map(|w| &w.id);
+            let current_index = items.iter().position(|w| Some(&w.window.id) == origin_id);
+            let recent = self.mru.iter().find_map(|id| {
+                items
+                    .iter()
+                    .position(|w| &w.window.id == id && Some(id) != origin_id)
+            });
+            let index = if mode != Mode::Held {
+                current_index.unwrap_or(0)
+            } else if reverse {
+                (current_index.unwrap_or(0) + items.len() - 1) % items.len()
+            } else {
+                recent.unwrap_or_else(|| current_index.map_or(0, |i| (i + 1) % items.len()))
+            };
+            Some(items[index].window.id.clone())
         } else {
             let index = if mode == Mode::Held && items.len() > 1 {
                 if reverse {
                     items.len() - 1
-                } else if origin.as_ref().map(|o| &o.id) == Some(&items[0].window.id) {
+                } else if origin.as_ref().map(|o| &o.id) == Some(&items[0].window.id)
+                    || (layer == Layer::Desktops && items[0].window.current_desktop == Some(true))
+                {
                     1
                 } else {
                     0
@@ -206,26 +609,38 @@ impl Engine {
             };
             Some(items[index].window.id.clone())
         };
-        let display = self
-            .snapshot
-            .displays
-            .iter()
-            .find(|d| d.id == current)
-            .cloned();
         self.session = Session {
             session_id: self.serial,
             revision: 1,
             mode,
+            layer,
+            sticky,
+            loading: layer == Layer::Tabs,
+            desktop_filter,
             windows: items,
+            desktop_previews,
             selected,
             origin,
             display,
+            overview,
+            desktops: self.snapshot.desktops.clone(),
+            spatial_ids,
             warnings: self.snapshot.warnings.clone(),
             ..Session::default()
         };
+        if layer == Layer::Tabs {
+            if let Some(origin) = self.session.origin.clone() {
+                return vec![Action::LoadTabs(self.serial, origin), Action::Publish];
+            }
+            return self.tabs_loaded(self.serial, Err("No focused window".into()));
+        }
         vec![Action::Show, Action::Publish]
     }
     pub fn navigate(&mut self, delta: isize) {
+        if self.session.loading {
+            self.load_delta += delta;
+            return;
+        }
         let ids: Vec<_> = self.results().iter().map(|w| w.window.id.clone()).collect();
         if ids.is_empty() {
             self.session.selected = None;
@@ -267,14 +682,9 @@ impl Engine {
         if let Some(id) = target {
             self.session.selected = Some(id);
             self.session.revision += 1;
-        } else {
-            self.navigate(if matches!(direction, "ArrowLeft" | "ArrowUp") {
-                -1
-            } else {
-                1
-            });
         }
     }
+
     pub fn results(&self) -> Vec<&HintWindow> {
         self.session
             .windows
@@ -290,7 +700,22 @@ impl Engine {
                             score(
                                 &format!(
                                     "{} {} {}",
-                                    w.window.app_name, w.window.title, w.window.app_id
+                                    w.window.app_name,
+                                    w.window.title,
+                                    format!(
+                                        "{} {} {}",
+                                        w.window.app_id,
+                                        w.window
+                                            .content
+                                            .as_ref()
+                                            .map(|c| format!("{} {}", c.subtitle, c.description))
+                                            .unwrap_or_default(),
+                                        w.window
+                                            .desktop_label
+                                            .as_ref()
+                                            .map(|label| label.chinese())
+                                            .unwrap_or_default()
+                                    )
                                 ),
                                 &self.session.query,
                             )
@@ -309,6 +734,10 @@ impl Engine {
         self.session.revision += 1;
     }
     pub fn activate(&mut self, id: Option<&str>) -> Vec<Action> {
+        if self.session.loading {
+            self.commit_on_load = true;
+            return vec![];
+        }
         let id = id
             .map(str::to_owned)
             .or_else(|| self.session.selected.clone());
@@ -323,12 +752,19 @@ impl Engine {
             };
         };
         // Validate against the newest inventory. Never reuse a closed window's code or native handle.
-        if !self
-            .snapshot
-            .windows
-            .iter()
-            .any(|w| w.id == target.id && w.pid == target.pid)
-        {
+        if if target.desktop_target {
+            !self
+                .snapshot
+                .desktops
+                .iter()
+                .any(|d| d.id == target.desktop_id)
+        } else {
+            !self
+                .snapshot
+                .windows
+                .iter()
+                .any(|w| w.id == target.native_target().id && w.pid == target.pid)
+        } {
             self.session.error =
                 Some("That window has closed. Open BeaconHop again to refresh.".into());
             self.session.revision += 1;
@@ -338,33 +774,99 @@ impl Engine {
         self.session.mode = Mode::Inactive;
         self.session.selected = Some(target.id.clone());
         self.session.revision += 1;
-        self.mru.retain(|id| id != &target.id);
-        self.mru.insert(0, target.id.clone());
-        self.pending_focus = Some((self.session.session_id, target.id.clone()));
+        let native_id = target.native_target().id;
+        if !target.desktop_target {
+            let mru = if target.content.is_some() {
+                &mut self.tab_mru
+            } else {
+                &mut self.mru
+            };
+            mru.retain(|id| id != &target.id);
+            mru.insert(0, target.id.clone());
+        }
+        self.pending_focus = if target.desktop_target {
+            None
+        } else {
+            Some((self.session.session_id, native_id))
+        };
         vec![Action::Activate(self.session.session_id, target)]
     }
     pub fn cancel(&mut self) -> Vec<Action> {
-        self.hint_extension = None;
-        self.sb_pending = false;
         let origin = self.session.origin.clone();
-        self.pending_focus = None;
-        self.session.mode = Mode::Inactive;
-        self.session.revision += 1;
+        self.dismiss();
         vec![Action::Cancel(self.session.session_id, origin)]
     }
-    pub fn handle(&mut self, event: KeyEvent) -> Response {
+    pub fn dismiss(&mut self) -> Vec<Action> {
+        self.clear_extension();
+        self.pending_focus = None;
+        self.commit_on_load = false;
+        self.session.loading = false;
+        self.session.mode = Mode::Inactive;
+        self.session.revision += 1;
+        vec![Action::Cancel(self.session.session_id, None)]
+    }
+    pub fn handle(&mut self, mut event: KeyEvent) -> Response {
         let mut response = Response::default();
         if event.down {
             self.pressed_keys.insert(event.code);
-            // Auto-repeat from the originating gesture must not cancel a cold handoff.
-            if !event.repeat || !self.consumed.contains(&event.code) {
-                self.sb_pending = false;
-            }
         } else {
             self.pressed_keys.remove(&event.code);
         }
         if !event.down && self.consumed.remove(&event.code) {
             response.consumed = true;
+        }
+        // A continuation owns the old gesture until each physical key is released.
+        // Modifier events still reach the OS, whose corresponding downs passed through.
+        self.continuation_modifiers &= event.modifiers;
+        if self.continuation_keys.contains(&event.code) {
+            if !event.down {
+                self.continuation_keys.remove(&event.code);
+            }
+            response.consumed |=
+                !matches!(event.key.as_str(), "Alt" | "Control" | "Super" | "Shift");
+            return response;
+        }
+        // Still-held modifiers from the previous layer must not turn fresh Tab or
+        // punctuation input into a different shortcut or hint in the new layer.
+        event.modifiers &= !self.continuation_modifiers;
+        if event.down && (!event.repeat || !self.consumed.contains(&event.code)) {
+            let was_pending = self.sb_pending;
+            self.sb_pending = false;
+            if was_pending && !matches!(event.key.as_str(), "Alt" | "Control" | "Super" | "Shift") {
+                // Input during the handoff cancels it, just like BH-to-BH
+                // continuation. Never send that first attempted hint/command
+                // into the selected application's editor while SB is loading.
+                self.consumed.insert(event.code);
+                response.consumed = true;
+                return response;
+            }
+        }
+        if self.continuation_pending {
+            if event.down
+                && !event.repeat
+                && !matches!(event.key.as_str(), "Alt" | "Control" | "Super" | "Shift")
+            {
+                self.clear_extension();
+                self.consumed.insert(event.code);
+                response.consumed = true;
+            }
+            return response;
+        }
+        if self.session.loading && event.down && event.key == "Escape" {
+            response.actions = self.cancel();
+            self.consumed.insert(event.code);
+            response.consumed = true;
+            return response;
+        }
+        if self.session.loading
+            && self.commit_on_load
+            && event.down
+            && !event.repeat
+            && !matches!(event.key.as_str(), "Alt" | "Control" | "Super" | "Shift")
+        {
+            // A quick Ctrl+Tab must not switch later in the middle of subsequent typing.
+            response.actions = self.dismiss();
+            return response;
         }
         if event.down
             && event.repeat
@@ -375,9 +877,18 @@ impl Engine {
             return response;
         }
         let hold = Shortcut::parse(&self.config.hold_shortcut).expect("validated configuration");
-        let search =
-            Shortcut::parse(&self.config.search_shortcut).expect("validated configuration");
-        if !self.config.screen_buoy.enabled {
+        let layer = self.session.layer;
+        let hold = match layer {
+            Layer::Windows => hold,
+            Layer::Application => Shortcut::parse(&self.config.application_hold_shortcut).unwrap(),
+            Layer::Tabs => Shortcut::parse(&self.config.tabs_hold_shortcut).unwrap(),
+            Layer::Desktops => Shortcut::parse(&self.config.desktops_hold_shortcut).unwrap(),
+        };
+        if !self.config.screen_buoy.enabled
+            && !self.config.hold_enabled
+            && !self.config.application_enabled
+            && !self.config.tabs_enabled
+        {
             self.hint_extension = None;
         }
         if let Some(extension) = &mut self.hint_extension {
@@ -387,14 +898,15 @@ impl Engine {
                 response.consumed = true;
                 return response;
             }
-            if !extension.requested {
+            if extension.requested.is_none() {
                 if !event.down && event.code == extension.code {
                     self.hint_extension = None;
                 } else if event.down
                     && !event.repeat
-                    && self.config.screen_buoy.matches(&extension.key, &event.key)
+                    && continuation(&self.config, &self.tab_apps, extension, &event.key).is_some()
                 {
-                    extension.requested = true;
+                    extension.requested =
+                        continuation(&self.config, &self.tab_apps, extension, &event.key);
                 } else if event.down
                     && !event.repeat
                     && event.code != extension.code
@@ -405,22 +917,48 @@ impl Engine {
             } else if event.down && !event.repeat && !self.consumed.contains(&event.code) {
                 self.hint_extension = None;
             }
-            if self.hint_extension.as_ref().is_some_and(|h| h.requested) {
+            if self
+                .hint_extension
+                .as_ref()
+                .is_some_and(|h| h.requested.is_some())
+            {
                 if !matches!(event.key.as_str(), "Alt" | "Control" | "Super" | "Shift") {
                     response.consumed = true;
                     if event.down {
                         self.consumed.insert(event.code);
                     }
                 }
-                // SB starts on keydown and drains the originating physical keys.
-                let target = self.hint_extension.take().unwrap().target;
-                self.drain_modifiers = 0;
-                self.sb_pending = true;
-                response.actions.push(Action::ScreenBuoy(
-                    self.session.session_id,
-                    target,
-                    self.pressed_keys.iter().copied().collect(),
-                ));
+                // Both destinations start on keydown. SB drains the physical keys
+                // itself; BH isolates them before its next layer can receive input.
+                {
+                    let extension = self.hint_extension.take().unwrap();
+                    let target = extension.target.native_target();
+                    self.drain_modifiers = 0;
+                    match extension.requested.unwrap() {
+                        Continuation::ScreenBuoy => {
+                            self.sb_pending = true;
+                            response.actions.push(Action::ScreenBuoy(
+                                self.session.session_id,
+                                target,
+                                self.pressed_keys.iter().copied().collect(),
+                            ));
+                        }
+                        kind => {
+                            self.continuation_keys.clone_from(&self.pressed_keys);
+                            self.continuation_modifiers |= event.modifiers;
+                            self.continuation_pending = true;
+                            response.actions.push(Action::Continue(
+                                self.session.session_id,
+                                target,
+                                match kind {
+                                    Continuation::Tabs => Layer::Tabs,
+                                    Continuation::Windows => Layer::Windows,
+                                    _ => Layer::Application,
+                                },
+                            ));
+                        }
+                    }
+                }
                 return response;
             }
         }
@@ -435,7 +973,14 @@ impl Engine {
                 return response;
             }
         }
-        if self.session.mode == Mode::Held && event.modifiers & hold.modifiers != hold.modifiers {
+        if self.session.mode == Mode::Held
+            && !self.session.sticky
+            // A chord remains held until all of its modifiers are released.
+            // Remappers can temporarily release Ctrl while translating Ctrl+A
+            // to Cmd+A. Committing on that first release selected the highlighted
+            // desktop before its A hint could reach us.
+            && event.modifiers & hold.modifiers == 0
+        {
             response.actions = if self.session.prefix.is_empty() {
                 self.activate(None)
             } else {
@@ -446,25 +991,36 @@ impl Engine {
         if !event.down {
             return response;
         }
-        if search.matches(&event.key, event.modifiers, false) && !event.repeat {
-            response.actions = if self.session.mode == Mode::Inactive {
-                self.open(Mode::Search, false)
-            } else {
-                self.session.mode = Mode::Search;
-                self.session.prefix.clear();
-                self.session.revision += 1;
-                vec![Action::Search, Action::Publish]
-            };
+        let requested = self.shortcut_layer(&event);
+        if let Some((layer, mode)) = requested {
             response.consumed = true;
-        } else if self.config.hold_enabled && hold.matches(&event.key, event.modifiers, true) {
-            response.consumed = true;
-            if self.session.mode == Mode::Inactive {
-                response.actions = self.open(Mode::Held, event.modifiers & SHIFT != 0);
-            } else {
-                self.session.prefix.clear();
-                self.navigate(if event.modifiers & SHIFT != 0 { -1 } else { 1 });
+            if self.session.mode != Mode::Inactive && self.session.layer == layer {
+                if mode == Mode::Search {
+                    self.commit_on_load = false;
+                    self.session.mode = mode;
+                    self.session.sticky = false;
+                    self.session.prefix.clear();
+                    self.session.revision += 1;
+                    if !self.session.loading {
+                        response.actions.push(Action::Search);
+                    }
+                } else {
+                    self.session.prefix.clear();
+                    self.navigate(if event.modifiers & SHIFT != 0 { -1 } else { 1 });
+                }
                 response.actions.push(Action::Publish);
+            } else {
+                let origin = if self.session.mode != Mode::Inactive {
+                    self.session.origin.clone()
+                } else {
+                    None
+                };
+                response.actions =
+                    self.open_layer(layer, mode, event.modifiers & SHIFT != 0, false, origin);
             }
+        } else if self.session.loading && self.session.mode == Mode::Search {
+            response.consumed =
+                !matches!(event.key.as_str(), "Alt" | "Control" | "Super" | "Shift");
         } else if self.session.mode == Mode::Held {
             match event.key.as_str() {
                 "Alt" | "Control" | "Super" | "Shift" => return response,
@@ -477,9 +1033,15 @@ impl Engine {
                         .expect("validated configuration") =>
                 {
                     self.session.mode = Mode::Search;
+                    self.commit_on_load = false;
+                    self.session.sticky = false;
                     self.session.prefix.clear();
                     self.session.revision += 1;
-                    response.actions = vec![Action::Search, Action::Publish];
+                    response.actions = if self.session.loading {
+                        vec![Action::Publish]
+                    } else {
+                        vec![Action::Search, Action::Publish]
+                    };
                 }
                 "Tab" => {
                     self.session.prefix.clear();
@@ -522,14 +1084,18 @@ impl Engine {
                         if let Some(id) = exact {
                             response.actions = self.activate(Some(&id));
                             self.drain_modifiers = hold.modifiers;
-                            if self.config.screen_buoy.enabled {
+                            if self.config.screen_buoy.enabled
+                                || self.config.hold_enabled
+                                || self.config.application_enabled
+                                || self.config.tabs_enabled
+                            {
                                 if let Some(Action::Activate(_, target)) = response.actions.first()
                                 {
                                     self.hint_extension = Some(HintExtension {
                                         target: target.clone(),
                                         key: event.key.clone(),
                                         code: event.code,
-                                        requested: false,
+                                        requested: None,
                                     });
                                 }
                             }
@@ -554,6 +1120,47 @@ impl Engine {
 
 pub fn score(text: &str, query: &str) -> Option<i64> {
     crate::search::SearchText::new(text.into()).score(query)
+}
+
+fn same_application(a: &Destination, b: &Destination) -> bool {
+    if a.app_id.is_empty() || b.app_id.is_empty() {
+        a.pid == b.pid
+    } else {
+        a.app_id.eq_ignore_ascii_case(&b.app_id)
+    }
+}
+fn continuation(
+    config: &Config,
+    apps: &HashSet<String>,
+    extension: &HintExtension,
+    key: &str,
+) -> Option<Continuation> {
+    if key == extension.key {
+        return None;
+    }
+    let matches = |bindings: &[String]| {
+        bindings.iter().any(|binding| {
+            crate::hint_keys::binding_key(binding, &extension.key, &config.screen_buoy.neighbours)
+                .as_deref()
+                == Some(key)
+        })
+    };
+    if config.hold_enabled && matches(&config.windows_hint_keys) {
+        return Some(Continuation::Windows);
+    }
+    if config.application_enabled && matches(&config.application_hint_keys) {
+        return Some(Continuation::Application);
+    }
+    if config.tabs_enabled
+        && apps.contains(&crate::plugins::app_key(&extension.target.app_id))
+        && matches(&config.tabs_hint_keys)
+    {
+        return Some(Continuation::Tabs);
+    }
+    if config.screen_buoy.matches(&extension.key, key) {
+        return Some(Continuation::ScreenBuoy);
+    }
+    None
 }
 
 #[cfg(test)]
@@ -595,6 +1202,8 @@ mod tests {
     fn engine(count: usize) -> Engine {
         let mut e = Engine::new(Config {
             hold_shortcut: "Alt+Tab".into(),
+            application_enabled: false,
+            tabs_enabled: false,
             ..Config::default()
         });
         e.update(Snapshot {
@@ -740,7 +1349,11 @@ mod tests {
     fn requested_extension_is_cancelled_by_unrelated_input() {
         let (mut e, hint) = extension_engine("Enter");
         e.handle(key("Enter", ALT, true));
-        e.handle(key("1", ALT, true));
+        assert!(e.handle(key("1", ALT, true)).consumed);
+        let mut repeat = key("1", ALT, true);
+        repeat.repeat = true;
+        assert!(e.handle(repeat).consumed);
+        assert!(e.handle(key("1", ALT, false)).consumed);
         for event in [
             key("1", ALT, false),
             key("Enter", ALT, false),
@@ -977,6 +1590,152 @@ mod tests {
         }
     }
     #[test]
+    fn window_overview_uses_recent_first_then_stable_cross_display_order() {
+        let mut e = engine(6);
+        e.snapshot.displays = vec![
+            Display {
+                id: "a".into(),
+                bounds: Bounds {
+                    x: -1440.,
+                    y: 0.,
+                    width: 1440.,
+                    height: 900.,
+                },
+                scale: 1.,
+                ..Default::default()
+            },
+            Display {
+                id: "b".into(),
+                bounds: Bounds {
+                    x: 0.,
+                    y: 0.,
+                    width: 1920.,
+                    height: 1080.,
+                },
+                scale: 1.,
+                ..Default::default()
+            },
+        ];
+        e.open(Mode::Held, false);
+        let original: Vec<_> = e
+            .session
+            .windows
+            .iter()
+            .map(|w| (w.window.id.clone(), w.hint.clone()))
+            .collect();
+        assert_eq!(
+            original.iter().map(|w| w.0.as_str()).collect::<Vec<_>>(),
+            ["0", "2", "4", "1", "3", "5"]
+        );
+        e.dismiss();
+        for id in ["1", "5", "2"] {
+            e.observe_focus(Some(id.into()));
+        }
+        e.snapshot.windows.reverse();
+        e.open(Mode::Held, false);
+        assert_eq!(e.session.selected.as_deref(), Some("5"));
+        assert_eq!(
+            e.session
+                .windows
+                .iter()
+                .map(|w| (w.window.id.clone(), w.hint.clone()))
+                .collect::<Vec<_>>(),
+            original
+        );
+        e.navigate(1);
+        assert_eq!(e.session.selected.as_deref(), Some("0"));
+        e.navigate(1);
+        assert_eq!(e.session.selected.as_deref(), Some("2"));
+        e.navigate(-1);
+        assert_eq!(e.session.selected.as_deref(), Some("0"));
+        e.dismiss();
+        e.open(Mode::Held, true);
+        assert_eq!(e.session.selected.as_deref(), Some("0"));
+        // Search and partial hints filter targets but never change saved slots.
+        let slots = e.session.overview[0].slots.clone();
+        e.session.prefix = e
+            .session
+            .windows
+            .iter()
+            .find(|w| w.window.id == "5")
+            .unwrap()
+            .hint
+            .clone();
+        assert_eq!(e.results().len(), 1);
+        assert_eq!(e.results()[0].window.id, "5");
+        assert_eq!(e.session.overview[0].slots, slots);
+        let action = e.activate(Some("5"));
+        assert!(
+            matches!(action.first(),Some(Action::Activate(_,w)) if w.id=="5" && w.display_id=="b")
+        );
+        e.finish_activation(e.session.session_id, Some("5".into()));
+        e.open(Mode::Held, false);
+        assert_eq!(e.session.selected.as_deref(), Some("2"));
+        e.dismiss();
+        e.config.display_scope = Scope::Current;
+        e.open(Mode::Held, false);
+        assert_eq!(e.session.overview.len(), 1);
+        assert!(e.session.windows.iter().all(|w| w.window.display_id == "b"));
+        assert_eq!(e.session.selected.as_deref(), Some("1"));
+    }
+    #[test]
+    fn window_session_keeps_native_desktop_order_independent_of_recency_and_search() {
+        let mut e = engine(4);
+        e.snapshot.desktops = ["9", "2", "17"]
+            .iter()
+            .enumerate()
+            .map(|(i, id)| Desktop {
+                id: (*id).into(),
+                name: format!("Space {i}"),
+                display_id: "a".into(),
+                display_ids: vec!["a".into(), "b".into()],
+                current: i == 1,
+                label: Some(DesktopLabel {
+                    number: i + 1,
+                    full_screen: i == 1,
+                }),
+            })
+            .collect();
+        e.observe_focus(Some("3".into()));
+        e.open(Mode::Search, false);
+        e.search("工作 2".into());
+        let serialized = serde_json::to_value(&e.session).unwrap();
+        assert_eq!(
+            serialized["desktops"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|d| d["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["9", "2", "17"]
+        );
+        assert_eq!(serialized["desktops"][1]["label"]["fullScreen"], true);
+        assert_eq!(serialized["desktops"][1]["current"], true);
+        assert_eq!(
+            serialized["desktops"][0]["displayIds"],
+            serde_json::json!(["a", "b"])
+        );
+    }
+    #[test]
+    fn spatial_snapshot_preserves_native_stack_and_excludes_nonvisible_windows() {
+        let mut e = engine(6);
+        for w in &mut e.snapshot.windows {
+            w.current_desktop = Some(true);
+        }
+        e.snapshot.windows[1].minimized = true;
+        e.snapshot.windows[2].hidden = true;
+        e.snapshot.windows[3].current_desktop = Some(false);
+        e.snapshot.windows[4].current_desktop = None;
+        e.snapshot.windows.reverse(); // Native stack, independent of preview order.
+        e.open(Mode::Held, false);
+        assert_eq!(e.session.spatial_ids, ["5", "0"]);
+        assert_eq!(e.session.windows.len(), 6); // All remain selectable in the preview area.
+        e.dismiss();
+        e.observe_focus(Some("5".into()));
+        e.open(Mode::Held, false);
+        assert_eq!(e.session.spatial_ids, ["5", "0"]);
+    }
+    #[test]
     fn held_arrow_keys_use_the_visible_card_geometry_and_do_not_leak() {
         let mut e = engine(4);
         e.open(Mode::Held, false);
@@ -1005,6 +1764,33 @@ mod tests {
             assert_eq!(e.session.selected.as_deref(), Some(wanted));
             assert!(e.handle(key(direction, ALT, false)).consumed);
         }
+    }
+    #[test]
+    fn directional_edges_do_not_wrap_through_tab_order() {
+        let mut e = engine(3);
+        e.open(Mode::Held, false);
+        e.session.selected = Some("1".into());
+        e.navigation = (0..3)
+            .map(|i| {
+                (
+                    i.to_string(),
+                    Bounds {
+                        x: i as f64 * 200.,
+                        y: 0.,
+                        width: 180.,
+                        height: 100.,
+                    },
+                )
+            })
+            .collect();
+        e.navigate_direction("ArrowDown");
+        assert_eq!(e.session.selected.as_deref(), Some("1"));
+        e.navigate_direction("ArrowRight");
+        assert_eq!(e.session.selected.as_deref(), Some("2"));
+        e.navigate_direction("ArrowRight");
+        assert_eq!(e.session.selected.as_deref(), Some("2"));
+        e.navigate(1);
+        assert_eq!(e.session.selected.as_deref(), Some("0")); // Tab still cycles.
     }
     #[test]
     fn expanding_to_two_keys_cannot_change_an_open_overview() {
@@ -1147,6 +1933,8 @@ mod edge_tests {
     fn empty_inventory_release_exits_hold_mode() {
         let mut e = Engine::new(Config {
             hold_shortcut: "Alt+Tab".into(),
+            application_enabled: false,
+            tabs_enabled: false,
             ..Config::default()
         });
         e.open(Mode::Held, false);
@@ -1164,6 +1952,8 @@ mod edge_tests {
     fn failed_release_enters_recoverable_search() {
         let mut e = Engine::new(Config {
             hold_shortcut: "Alt+Tab".into(),
+            application_enabled: false,
+            tabs_enabled: false,
             ..Config::default()
         });
         let w = Destination {
@@ -1188,6 +1978,8 @@ mod edge_tests {
     fn repeat_cannot_submit_a_two_letter_hint() {
         let mut e = Engine::new(Config {
             hold_shortcut: "Alt+Tab".into(),
+            application_enabled: false,
+            tabs_enabled: false,
             ..Config::default()
         });
         e.snapshot.windows = (0..30)
@@ -1223,3 +2015,7 @@ mod edge_tests {
         assert_eq!(e.session.prefix, prefix);
     }
 }
+
+#[cfg(test)]
+#[path = "engine_layers.rs"]
+mod layer_tests;

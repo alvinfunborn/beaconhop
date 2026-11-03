@@ -1,6 +1,6 @@
 {
   "name": "beaconhop",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -12,8 +12,16 @@
     "tauri:dev": "tauri dev",
     "test": "cargo test --manifest-path src-tauri/Cargo.toml --lib",
     "test:ui": "playwright test",
+    "test:browser": "cargo build --manifest-path src-tauri/Cargo.toml && node --test scripts/test-browser-plugin.mjs scripts/test-browser-previews.mjs",
     "icons": "node scripts/icons.mjs",
-    "check:version": "node scripts/check-version.mjs"
+    "check:version": "node scripts/check-version.mjs",
+    "plugins:prepare": "node scripts/sync-plugin-sdk.mjs",
+    "test:plugins": "node --test plugins/sdk/test/sdk.cjs",
+    "test:plugin-manager": "cargo build --manifest-path src-tauri/Cargo.toml && node --test scripts/test-plugin-manager.mjs",
+    "plugins:bundle": "node scripts/bundle-plugins.mjs",
+    "plugins:check-release": "node scripts/bundle-plugins.mjs --require-store",
+    "prebuild": "npm run plugins:bundle",
+    "predev": "npm run plugins:bundle"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.5.0",
@@ -28,6 +36,8 @@
     "@types/react": "^18.2.15",
     "@types/react-dom": "^18.2.7",
     "@vitejs/plugin-react": "^4.4.1",
+    "@vscode/vsce": "4.1.0",
+    "fflate": "0.8.2",
     "sharp": "^0.35.5",
     "typescript": "^5.0.2",
     "vite": "^6.3.3"

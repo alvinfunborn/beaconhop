@@ -89,6 +89,40 @@ pub fn physical_key(value: &str) -> Option<String> {
     Some(c.to_ascii_uppercase().to_string())
 }
 
+pub fn valid_binding(key: &str) -> bool {
+    matches!(
+        key,
+        "Alt" | "Control" | "Super" | "Shift" | "HintLeftKey" | "HintRightKey"
+    ) || physical_key(key).as_deref() == Some(key)
+}
+// Accept the previous single-key fields while always saving key arrays.
+pub fn deserialize_bindings<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Bindings {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match Bindings::deserialize(deserializer)? {
+        Bindings::One(key) => vec![key],
+        Bindings::Many(keys) => keys,
+    })
+}
+pub fn binding_key(
+    binding: &str,
+    last: &str,
+    neighbours: &BTreeMap<String, Neighbours>,
+) -> Option<String> {
+    match binding {
+        "HintLeftKey" => neighbours.get(last)?.left.clone(),
+        "HintRightKey" => neighbours.get(last)?.right.clone(),
+        "Alt" | "Control" | "Super" | "Shift" => Some(binding.into()),
+        other => physical_key(other),
+    }
+}
+
 impl ScreenBuoy {
     pub fn matches(&self, last: &str, key: &str) -> bool {
         if !self.enabled || last == key {
