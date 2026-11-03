@@ -8,7 +8,8 @@ import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {createPreviews} from '../plugins/browser/previews.js';
 
-test('browser adapter and actual native host: focus, identity, framing, authentication and cleanup', {timeout:15000}, async()=>{
+for (const lineEnding of ['\n', '\r\n']) {
+test(`browser adapter and actual native host (${lineEnding === '\n' ? 'LF' : 'CRLF'}): focus, identity, framing, authentication and cleanup`, {timeout:15000}, async()=>{
   await fs.mkdir('logs',{recursive:true});
   const directory=await fs.mkdtemp(path.resolve('logs/browser-plugin-'));
   const executable=process.env.BH_TEST_EXECUTABLE || path.resolve(process.platform==='win32'?'src-tauri/target/debug/beaconhop.exe':'src-tauri/target/debug/beaconhop');
@@ -32,7 +33,8 @@ test('browser adapter and actual native host: focus, identity, framing, authenti
     chrome.runtime.onMessage=event();
     const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO9sAAAAASUVORK5CYII=','base64');
     chrome.runtime.getURL=p=>'chrome-extension://test'+p;
-    vm.runInNewContext((await fs.readFile('plugins/browser/background.js','utf8')).replace(/^import .*\n/,''),{chrome,createPreviews,navigator:{userAgent:'Chrome/155'},console,URL,AbortSignal,btoa,fetch:async url=>{assert.equal(url.protocol,'chrome-extension:');return {ok:true,arrayBuffer:async()=>png};}});
+    const background=(await fs.readFile('plugins/browser/background.js','utf8')).replace(/\r?\n/g,lineEnding);
+    vm.runInNewContext(background.replace(/^import [^\r\n]*\r?\n/,''),{chrome,createPreviews,navigator:{userAgent:'Chrome/155'},console,URL,AbortSignal,btoa,fetch:async url=>{assert.equal(url.protocol,'chrome-extension:');return {ok:true,arrayBuffer:async()=>png};}});
     let endpoint;for(let i=0;i<100&&!endpoint;i++){const filename=(await fs.readdir(directory)).find(f=>f.endsWith('.json'));if(filename)endpoint=JSON.parse(await fs.readFile(path.join(directory,filename),'utf8'));else await new Promise(r=>setTimeout(r,20));}
     assert(endpoint,`No host endpoint: ${stderr}`);
     assert.deepEqual(endpoint.capabilities,['thumbnails']);
@@ -50,3 +52,4 @@ test('browser adapter and actual native host: focus, identity, framing, authenti
     child.stdin.end();await once(child,'exit');assert.equal((await fs.readdir(directory)).filter(f=>f.endsWith('.json')).length,0);assert.equal(stderr,'');
   } finally {child.kill();await fs.rm(directory,{recursive:true,force:true});}
 });
+}
