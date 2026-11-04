@@ -1,7 +1,7 @@
 import type { Destination, OverviewPanel, NativeDesktop } from "./types";
 
 type Area = {x:number;y:number;width:number;height:number};
-type SpatialGuide = {x:number;y:number;group:string;home:Area;origin:Area};
+type SpatialGuide = {x:number;y:number;group:string;rank:number;home:Area;origin:Area};
 
 export type Tile = { x: number; y: number; width: number; height: number; preview: number; meta: number; origin?: {x:number;y:number;width:number;height:number} };
 
@@ -17,7 +17,11 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
     const x = guides[i]?.x ?? (visible ? ox + (w.bounds.x - screen.x + w.bounds.width / 2) * scale : width * (i + 1) / (windows.length + 1));
     const y = guides[i]?.y ?? (visible ? oy + (w.bounds.y - screen.y + w.bounds.height / 2) * scale : height * .9);
     const aspect = Math.max(.5, Math.min(2.5, w.bounds.width / Math.max(1, w.bounds.height)));
-    const w0 = Math.min(width * .8, Math.max(220, w.bounds.width * scale));
+    // A tiny native utility window still needs a useful preview. Keep native
+    // proportions in the footprint, while narrowing the size range of cards.
+    const reference = Math.sqrt(width*height/windows.length*aspect);
+    const w0 = guides.length ? Math.min(width*.8,Math.max(reference*.85,Math.min(reference*1.2,w.bounds.width*scale)))
+      : Math.min(width * .8, Math.max(220, w.bounds.width * scale));
     return {x, y, width: w0, height: w0 / aspect + 32};
   });
   const tile = (x: number, y: number, w: number, h: number): Tile => ({x,y,width:w,height:h,meta:Math.min(32,h*.23),preview:h-Math.min(32,h*.23)});
@@ -26,18 +30,49 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
     : spatialIds.includes(w.id) ? tile(ox+(w.bounds.x-screen.x)*scale,oy+(w.bounds.y-screen.y)*scale,w.bounds.width*scale,w.bounds.height*scale)
     : tile(Math.max(0,Math.min(width-Math.min(120,width),anchors[i].x-60)),Math.max(0,height-80),Math.min(120,width),Math.min(76,height)));
   if (stacked) return {columns: 1, tiles: originals};
-  const order=anchors.map((_,i)=>i).sort((a,b)=>anchors[b].width*anchors[b].height-anchors[a].width*anchors[a].height || a-b);
+  let order:number[]=[];
   function pack(shrink:number) {
     const placed: {x:number;y:number;width:number;height:number;index:number}[]=[];
+    let free:Area[]=[{x:0,y:0,width,height}];
     for(const index of order) {
       const a=anchors[index],w=a.width*shrink,h=a.height*shrink,gap=12;
       if(w>width||h>height)return null;
       const clamp=(x:number,y:number)=>({x:Math.max(0,Math.min(width-w,x)),y:Math.max(0,Math.min(height-h,y))});
+      const guide=guides[index];
+      const own=guide ? placed.filter(p=>guides[p.index].group===guide.group) : [];
+      const lastInGroup=guide && !order.slice(order.indexOf(index)+1).some(i=>guides[i].group===guide.group);
+      const previousRank=guide ? Math.max(-1,...placed.map(p=>guides[p.index].rank).filter(rank=>rank<guide.rank)) : -1;
+      const previous=guide ? placed.filter(p=>guides[p.index].rank===previousRank) : [];
       const origin=clamp(a.x-w/2,a.y-h/2);
       const candidates=[origin,clamp(0,0),clamp(width-w,0),clamp(0,height-h),clamp(width-w,height-h)];
       for(const p of placed) {
         for(const x of [p.x-w-gap,p.x+p.width+gap])for(const y of [origin.y,p.y,p.y+p.height-h])candidates.push(clamp(x,y));
         for(const y of [p.y-h-gap,p.y+p.height+gap])for(const x of [origin.x,p.x,p.x+p.width-w])candidates.push(clamp(x,y));
+      }
+      // The last card completes the desktop's collective center. Constrain that
+      // center rather than every edge, keeping desktop order without columns.
+      const minCenterX=lastInGroup && previous.length
+        ? previous.reduce((sum,p)=>sum+p.x+p.width/2,0)/previous.length*(own.length+1)
+          -own.reduce((sum,p)=>sum+p.x+p.width/2,0) : -Infinity;
+      if(guide){
+        let left=Math.max(0,minCenterX-w/2),right=width-w,top=0,bottom=height-h;
+        for(const p of placed){
+          const other=guides[p.index];if(other.group===guide.group)continue;
+          const home=guide.home,b=other.home,px=p.x+p.width/2,py=p.y+p.height/2;
+          if(home.x+home.width<=b.x+.1)right=Math.min(right,px-w/2-.6);
+          if(b.x+b.width<=home.x+.1)left=Math.max(left,px-w/2+.6);
+          if(home.y+home.height<=b.y+.1)bottom=Math.min(bottom,py-h/2-.6);
+          if(b.y+b.height<=home.y+.1)top=Math.max(top,py-h/2+.6);
+        }
+        // Free rectangles find holes whose x and y edges come from different
+        // windows; neighbor-only candidates miss these and shrink too early.
+        for(const f of free){
+          const x1=Math.max(left,f.x),x2=Math.min(right,f.x+f.width-w);
+          const y1=Math.max(top,f.y),y2=Math.min(bottom,f.y+f.height-h);
+          if(x1>x2||y1>y2)continue;
+          candidates.push({x:Math.max(x1,Math.min(x2,origin.x)),y:Math.max(y1,Math.min(y2,origin.y))},
+            {x:x1,y:y1},{x:x1,y:y2},{x:x2,y:y1},{x:x2,y:y2});
+        }
       }
       let best: {x:number;y:number}|null=null,score=Infinity;
       for(const c of candidates) {
@@ -54,23 +89,56 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
             || home.y+home.height<=b.y+.1 && cy>=py-.5
             || b.y+b.height<=home.y+.1 && py>=cy-.5;
         }))continue;
+        if(cx<minCenterX-.1)continue;
         const distance=((cx-a.x)/width)**2+((cy-a.y)/height)**2;
         if(distance<score){best=c;score=distance;}
       }
       if(!best)return null;
       placed.push({...best,width:w,height:h,index});
+      if(guide){
+        const cut={x:best.x-gap,y:best.y-gap,right:best.x+w+gap,bottom:best.y+h+gap};
+        free=free.flatMap(f=>{
+          const right=f.x+f.width,bottom=f.y+f.height;
+          if(cut.x>=right||cut.right<=f.x||cut.y>=bottom||cut.bottom<=f.y)return [f];
+          const pieces:Area[]=[];
+          if(cut.x>f.x)pieces.push({...f,width:cut.x-f.x});
+          if(cut.right<right)pieces.push({...f,x:cut.right,width:right-cut.right});
+          if(cut.y>f.y)pieces.push({...f,height:cut.y-f.y});
+          if(cut.bottom<bottom)pieces.push({...f,y:cut.bottom,height:bottom-cut.bottom});
+          return pieces;
+        }).filter((f,i,all)=>!all.some((b,j)=>j!==i && b.x<=f.x && b.y<=f.y
+          && b.x+b.width>=f.x+f.width && b.y+b.height>=f.y+f.height
+          && (j<i||b.width*b.height>f.width*f.height)));
+      }
     }
     return placed.sort((a,b)=>a.index-b.index).map(n=>tile(n.x,n.y,n.width,n.height));
   }
-  let low=0,high=1,best:Tile[]=[];
-  for(let i=0;i<14;i++) {
-    const middle=(low+high)/2,result=pack(middle);
-    if(result){low=middle;best=result;}else high=middle;
+  let best:Tile[]=[],largest=0;
+  const strategies=guides.length ? ['area','x','y','small'] : ['area'];
+  for(const strategy of strategies){
+    order=anchors.map((_,i)=>i).sort((a,b)=>(guides[a]?.rank ?? 0)-(guides[b]?.rank ?? 0)
+      || (strategy==='x' ? anchors[a].x-anchors[b].x : strategy==='y' ? anchors[a].y-anchors[b].y
+        : (strategy==='small' ? -1 : 1)*(anchors[b].width*anchors[b].height-anchors[a].width*anchors[a].height)) || a-b);
+    let low=0,high=1,candidate:Tile[]=[];
+    for(let i=0;i<14;i++) {
+      const middle=(low+high)/2,result=pack(middle);
+      if(result){low=middle;candidate=result;}else high=middle;
+    }
+    if(low>largest){largest=low;best=candidate;}
+  }
+  if(guides.length && best.length){
+    const left=Math.min(...best.map(t=>t.x)),top=Math.min(...best.map(t=>t.y));
+    const spanX=Math.max(...best.map(t=>t.x+t.width))-left,spanY=Math.max(...best.map(t=>t.y+t.height))-top;
+    const zoom=Math.min(width/spanX,height/spanY);
+    const ox=(width-spanX*zoom)/2,oy=(height-spanY*zoom)/2;
+    // Use the whole canvas after resolving collisions. A uniform transform
+    // keeps aspect ratios, desktop order, and the shared inter-window gaps.
+    best=best.map(t=>tile(ox+(t.x-left)*zoom,oy+(t.y-top)*zoom,t.width*zoom,t.height*zoom));
   }
   return {columns:1,tiles:best.map((t,i)=>({...t,origin:originals[i]}))};
 }
 
-export type DesktopAnchor = Area & {desktop:NativeDesktop; ids:string[]};
+export type DesktopAnchor = Area & {desktop:NativeDesktop; ids:string[]; centerX:number};
 
 // Preserve native desktop order in a weighted, two-dimensional map. A crowded
 // desktop gets the large area; its sparse successors can stack in the remainder.
@@ -116,7 +184,7 @@ export function desktopOverviewTiles(panel:OverviewPanel, windows:Destination[],
         : {x:ox+(w.bounds.x-screen.x)*scale,y:oy+(w.bounds.y-screen.y)*scale,width:w.bounds.width*scale,height:w.bounds.height*scale};
       // Draw the whole scene toward its center; desktop areas are only hints
       // for placement. Shared packing fills the space between those hints.
-      byId.set(w.id,{group:g.desktop.id,home,origin,
+      byId.set(w.id,{group:g.desktop.id,rank:i,home,origin,
         x:width/2+(origin.x+origin.width/2-width/2)*.55,
         y:canvasHeight/2+(origin.y+origin.height/2-canvasHeight/2)*.55});
     });
@@ -130,7 +198,7 @@ export function desktopOverviewTiles(panel:OverviewPanel, windows:Destination[],
     const y=cards.length ? Math.min(...cards.map(t=>t.y)) : areas[i].y+top;
     const right=cards.length ? Math.max(...cards.map(t=>t.x+t.width)) : x+areas[i].width;
     const bottom=cards.length ? Math.max(...cards.map(t=>t.y+t.height)) : y+areas[i].height;
-    return {desktop:g.desktop,ids:g.items.map(w=>w.id),x,y:y-top,width:right-x,height:bottom-y+top};
+    return {desktop:g.desktop,ids:g.items.map(w=>w.id),centerX:cards.length ? cards.reduce((sum,t)=>sum+t.x+t.width/2,0)/cards.length : x+(right-x)/2,x,y:y-top,width:right-x,height:bottom-y+top};
   })};
 }
 

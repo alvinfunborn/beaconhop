@@ -1001,8 +1001,12 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
   const textContent = session?.layer === "tabs" && presentation(session, config.layout) === "text";
   const listLayout = config.layout === "list" || textContent;
   const desktopGrid = session?.layer === "desktops" && config.layout === "grid";
+  // Selection and search update the session frequently; collision avoidance
+  // depends only on the full inventory and its geometry.
+  const overviewKey=panel ? JSON.stringify([panel,localWindows.map(w=>[w.id,w.bounds,w.desktopId,w.hidden,w.minimized]),session?.spatialIds,session?.desktops]) : null;
+  const overviewLayout=useMemo(()=>panel ? desktopOverviewTiles(panel,localWindows,available.width,available.height,stacked,session?.spatialIds ?? [],session?.desktops) : undefined,[overviewKey,available,stacked]);
   const tiles: {columns:number; tiles:(Tile | undefined)[]; regions?:DesktopAnchor[]} = useMemo(() => panel ? (() => {
-    const all=desktopOverviewTiles(panel, localWindows, available.width, available.height, stacked, session?.spatialIds ?? [], session?.desktops);
+    const all=overviewLayout!;
     return {...all,tiles:visible.map(w=>all.tiles[localWindows.findIndex(a=>a.id===w.id)])};
   })() : desktopGrid ? (() => {
     const columns = Math.max(1, Math.min(3, visible.length, Math.floor(available.width / 260)));
@@ -1011,7 +1015,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
     return {columns, tiles: visible.map((_,i) => ({x:(i % columns) * (width + 14), y:Math.floor(i / columns) * (height + 14), width, height, preview:height - 48, meta:48}))};
   })() : contentLayer && listLayout
     ? textRows(visible, available.width)
-    : tileWindows(visible, available.width, available.height, listLayout, session?.layer === "tabs"), [session, available, listLayout, contentLayer, desktopGrid, stacked]);
+    : tileWindows(visible, available.width, available.height, listLayout, session?.layer === "tabs"), [session, available, listLayout, contentLayer, desktopGrid, stacked, overviewLayout]);
   const desktopRegions = tiles.regions ?? [];
   const localSession = session ? {...session, windows: [...new Map([...localWindows, ...spatialWindows].map(w => [w.id,w])).values()]} : undefined;
   const images = usePreviews(localSession, participating && config.thumbnails && (!listLayout || !!panel) && (!!panel || contentLayer || !windowsNative));
@@ -1167,7 +1171,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
           style={{left:region.x+14,top:region.y+14,width:region.width,height:region.height,
             "--desktop-color":`hsl(${[258,186,34,330,115,215][index%6]} 65% 65%)`} as CSSProperties} />)}
         {desktopRegions.map(region => <div className={"desktop-anchor " + (region.desktop.current ? "current-desktop" : "")} key={region.desktop.id}
-          data-desktop-id={region.desktop.id} style={{left:region.x+region.width/2+14,top:region.y+18,maxWidth:Math.max(1,region.width-16)}}>
+          data-desktop-id={region.desktop.id} style={{left:region.centerX+14,top:region.y+18,maxWidth:Math.max(1,region.width-16)}}>
           <div className="desktop-anchor-title"><strong>{region.desktop.id === "__unknown" ? t("Unknown desktop", "桌面归属未知") : region.desktop.label && zh ? `${region.desktop.label.fullScreen ? "全屏空间" : "桌面"} ${region.desktop.label.number}` : region.desktop.name}</strong>
             <span>{region.desktop.current ? t("Current · ", "当前 · ") : ""}{region.ids.length}</span></div>
         </div>)}

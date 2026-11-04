@@ -273,15 +273,79 @@ test('desktops share compact packing with relative ownership, including hidden a
       if(group(a.id)===1 && group(b.id)===2)
         expect(center(a,viewport.width===1376?'y':'x')).toBeLessThan(center(b,viewport.width===1376?'y':'x'));
     }
+    const groupCenters=[0,1,2].map(g=>{
+      const own=cards.filter(c=>group(c.id)===g);return own.reduce((sum,c)=>sum+center(c,'x'),0)/own.length;
+    });
+    expect(groupCenters[1]).toBeGreaterThanOrEqual(groupCenters[0]-.2);
+    expect(groupCenters[2]).toBeGreaterThanOrEqual(groupCenters[1]-.2);
     for(const desktop of [1,2]){
       const gaps=cards.filter(c=>group(c.id)===desktop).flatMap(a=>cards.filter(c=>group(c.id)<desktop).map(b=>
         Math.hypot(Math.max(0,a.x-b.x-b.w,b.x-a.x-a.w),Math.max(0,a.y-b.y-b.h,b.y-a.y-a.h))));
-      // Desktop seams use the normal 12px card gap, even when minimized or
-      // hidden windows are present. No independently packed islands remain.
-      expect(Math.min(...gaps)).toBeLessThanOrEqual(13);
+      // Desktop seams stay proportional to the ordinary card gap as the
+      // shared scene expands to fill the canvas. No isolated islands remain.
+      expect(Math.min(...gaps)).toBeLessThanOrEqual(Math.max(13,Math.min(...cards.map(c=>c.w))*.07));
     }
   }
   await page.screenshot({path:'logs/multi-display-overview/desktop-center-ownership.png'});
+});
+
+test('later desktop groups never drift to the left when stacked or inventory arrives in MRU order',async({page})=>{
+  await fixture(page);await page.setViewportSize({width:1376,height:804});await page.goto(left);
+  await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{
+    s.desktops=['one','two','three','four'].map((id,i)=>({id,name:'Desktop '+(i+1),displayId:'1',current:i===0}));
+    const template=s.windows[0],assignment=[2,0,1,0,3,0,2,0,1,0];
+    s.windows=assignment.map((desktop,i)=>({...template,id:String(i),desktopId:s.desktops[desktop].id,
+      displayId:'1',currentDesktop:desktop===0,minimized:false,hidden:false,
+      bounds:{x:-1400+(i%3)*340,y:30+(i%4)*90,width:900+(i%2)*200,height:700}}));
+    s.resultIds=s.windows.map((w:any)=>w.id);s.overview[0].slots=s.resultIds;s.overview[1].slots=[];
+  }));
+  await assertFits(page,10);
+  const groups=await page.getByRole('option').evaluateAll(nodes=>{
+    const assignment=[2,0,1,0,3,0,2,0,1,0];
+    return [0,1,2,3].map(g=>{
+      const own=nodes.filter(n=>assignment[Number(n.id.slice(7))]===g);
+      return own.reduce((sum,n)=>{const r=n.getBoundingClientRect();return sum+r.x+r.width/2;},0)/own.length;
+    });
+  });
+  for(let i=1;i<groups.length;i++)expect(groups[i]).toBeGreaterThanOrEqual(groups[i-1]-.2);
+  // Reordering MRU inventory cannot reverse the native desktop sequence.
+  await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{s.windows.reverse();}));
+  await assertFits(page,10);
+  const centers=await Promise.all(['one','two','three','four'].map(async desktop=>{
+    const ids=await page.evaluate(async desktop=>{
+      const s:any=await (await import('/src/api.ts' as string)).call('get_session');
+      return s.windows.filter((w:any)=>w.desktopId===desktop).map((w:any)=>w.id);
+    },desktop);
+    const xs=await Promise.all(ids.map(async(id:string)=>{const r=(await page.locator('#window-'+id).boundingBox())!;return r.x+r.width/2;}));
+    return xs.reduce((a,b)=>a+b,0)/xs.length;
+  }));
+  for(let i=1;i<centers.length;i++)expect(centers[i]).toBeGreaterThanOrEqual(centers[i-1]-.2);
+});
+
+test('large monitors use the canvas and keep small native windows readable',async({page})=>{
+  await fixture(page);await page.setViewportSize({width:2496,height:1344});await page.goto(left);
+  await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{
+    s.desktops=['one','two','three','four'].map((id,i)=>({id,name:'Desktop '+(i+1),displayId:'1',current:i===0}));
+    const scene=[
+      [0,0,400,1680,1020],[0,0,0,2560,1370],[0,1060,0,1500,1000],[0,1750,820,810,620],
+      [1,480,280,1910,1150],[2,0,0,2560,1300],[1,0,0,2560,1290],[0,970,0,1590,900],
+      [3,0,0,2560,1440],[2,380,190,2120,1250],
+    ];
+    const template=s.windows[0];
+    s.windows=scene.map(([desktop,x,y,width,height],i)=>({...template,id:String(i),displayId:'1',
+      desktopId:s.desktops[desktop].id,currentDesktop:desktop===0,minimized:false,hidden:false,bounds:{x,y,width,height}}));
+    s.resultIds=s.windows.map((w:any)=>w.id);s.overview[0].slots=s.resultIds;s.overview[1].slots=[];
+    s.overview[0].display.bounds={x:0,y:0,width:2560,height:1440};
+    s.spatialIds=['0','1','2','3','7'];
+  }));
+  await assertFits(page,10);
+  const boxes=await page.getByRole('option').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height};}));
+  const canvas=(await page.locator('.window-list').boundingBox())!;
+  const coverage=boxes.reduce((sum,r)=>sum+r.w*r.h,0)/((canvas.width-28)*(canvas.height-28));
+  expect(coverage).toBeGreaterThan(.55);
+  expect(Math.min(...boxes.map(r=>r.w))).toBeGreaterThan(300);
+  expect(Math.max(...boxes.map(r=>r.w))/Math.min(...boxes.map(r=>r.w))).toBeLessThan(1.6);
+  await page.screenshot({path:'logs/preview-density-20261104/large-monitor.png'});
 });
 
 test('desktop membership supports shared displays, an empty current desktop and unknown ownership',async({page})=>{
