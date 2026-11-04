@@ -184,7 +184,7 @@ test('native desktop order anchors one continuous canvas and survives search and
   // the remaining width is better used vertically.
   const centers=await page.locator('.desktop-anchor').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y};}));
   expect(centers[0].x).toBeLessThan(centers[1].x);
-  expect(centers[1].x).toBeCloseTo(centers[2].x,0);expect(centers[1].y).toBeLessThan(centers[2].y);
+  expect(centers[1].x).toBeLessThan(centers[2].x);
   await expect(page.locator('.desktop-region')).toHaveCount(0);
   const before=await page.locator('#window-2').boundingBox();
   await page.getByRole('button',{name:'Original stack',exact:true}).click();
@@ -192,16 +192,17 @@ test('native desktop order anchors one continuous canvas and survives search and
   expect(stacked.width).toBeGreaterThan(0);
   const originalCenters=await Promise.all(['1','2','0'].map(async id=>{const r=(await page.locator('#window-'+id).boundingBox())!;return {x:r.x+r.width/2,y:r.y+r.height/2};}));
   expect(originalCenters[0].x).toBeLessThan(originalCenters[1].x);
-  expect(originalCenters[1].y).toBeLessThan(originalCenters[2].y);
+  expect(originalCenters[1].x).toBeLessThan(originalCenters[2].x);
   await page.getByRole('button',{name:'Original stack',exact:true}).click();
   await api(page,'open_search');await page.getByRole('textbox').fill('Safari');
   await expect(page.getByRole('option')).toHaveCount(1);expect(await page.locator('#window-2').boundingBox()).toEqual(before);
   await expect(page.locator('.desktop-anchor')).toHaveCount(3);
   await page.getByRole('textbox').fill('');
   await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{s.selected='1';}));
+  const start=(await page.locator('#window-1').boundingBox())!;
   await page.getByRole('textbox').press('ArrowRight');
-  // Desktop 3 now shares the lower visual row with the departure card.
-  expect((await api(page,'get_session') as any).selected).toBe('0');
+  const target=(await page.getByRole('option',{selected:true}).boundingBox())!;
+  expect(target.x+target.width/2).toBeGreaterThan(start.x+start.width/2);
   const config=await api(page,'get_settings');await api(page,'save_settings',{config:{...config as any,language:'zh'}});
   await expect(page.locator('.desktop-anchor-title')).toContainText(['桌面 1','全屏空间 2','桌面 3']);
   await page.screenshot({path:'logs/multi-display-overview/desktops-spatial-zh.png'});
@@ -221,17 +222,16 @@ test('uneven desktops preserve ownership without desktop containers',async({page
   await expect(page.locator('.desktop-anchor')).toHaveCount(2);await assertFits(page,6);
   const sparse=(await page.locator('.desktop-wash[data-desktop-id="left"]').boundingBox())!;
   const dense=(await page.locator('.desktop-wash[data-desktop-id="right"]').boundingBox())!;
-  expect(dense.width*dense.height).toBeCloseTo(5*sparse.width*sparse.height,-2);
-  const boundary=sparse.x+sparse.width;
+  expect(dense.width*dense.height).toBeGreaterThan(sparse.width*sparse.height);
   const boxes=await page.getByRole('option').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return {left:r.x,right:r.right};}));
-  expect((boxes[0].left+boxes[0].right)/2).toBeLessThan(boundary);
-  for(const b of boxes.slice(1))expect((b.left+b.right)/2).toBeGreaterThan(boundary);
+  const sparseCenter=(boxes[0].left+boxes[0].right)/2;
+  for(const b of boxes.slice(1))expect((b.left+b.right)/2).toBeGreaterThan(sparseCenter);
   await expect(page.locator('.desktop-region')).toHaveCount(0);
   await page.screenshot({path:'logs/multi-display-overview/desktops-continuous-uneven.png'});
   await page.setViewportSize({width:760,height:1000});await assertFits(page,6);
 });
 
-test('crowded desktop keeps all six centers near its own label, including hidden and minimized windows',async({page})=>{
+test('desktops share compact packing with relative ownership, including hidden and minimized windows',async({page})=>{
   await fixture(page);await page.goto(left);
   await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{
     s.desktops=['one','two','three'].map((id,i)=>({id,name:'Desktop '+(i+1),displayId:'1',current:i===0}));
@@ -253,22 +253,32 @@ test('crowded desktop keeps all six centers near its own label, including hidden
       const r=n.getBoundingClientRect();return [(n as HTMLElement).dataset.desktopId,{x:r.x,y:r.y,width:r.width,height:r.height}];
     })));
     if(viewport.width===1376){
-      // Six windows use the large left area. The two sparse successors share
-      // the right side vertically, rather than reserving three equal columns.
-      expect(regions.one.width).toBeGreaterThan(viewport.width*.55);
-      expect(regions.two.x).toBeCloseTo(regions.three.x,0);
-      expect(regions.two.y+regions.two.height).toBeCloseTo(regions.three.y,0);
-      expect(regions.one.width*regions.one.height).toBeCloseTo(3*regions.two.width*regions.two.height,-2);
+      // Background bounds follow the packed cards, never reserve columns.
+      expect(regions.one.width*regions.one.height).toBeGreaterThan(regions.two.width*regions.two.height);
+      expect(regions.two.y).toBeLessThan(regions.three.y);
       await expect(page.locator('.desktop-wash').first()).toHaveCSS('border-width','0px');
       expect(await page.locator('.desktop-wash').first().evaluate(n=>getComputedStyle(n).backgroundImage)).toContain('radial-gradient');
-      await page.screenshot({path:'logs/tab-order-20261104/adaptive-desktops-wide.png'});
+      await page.screenshot({path:'logs/fused-desktops-20261104/fused-desktops-wide.png'});
     }
-    for(let i=0;i<10;i++){
-      const b=(await page.locator('#window-'+i).boundingBox())!,r=regions[i<6?'one':i<8?'two':'three'];
-      expect(b.x+b.width/2,'desktop ownership x for '+i).toBeGreaterThan(r.x);
-      expect(b.x+b.width/2).toBeLessThan(r.x+r.width);
-      expect(b.y+b.height/2,'desktop ownership y for '+i).toBeGreaterThan(r.y);
-      expect(b.y+b.height/2).toBeLessThan(r.y+r.height);
+    const cards=await page.getByRole('option').evaluateAll(nodes=>nodes.map(n=>{
+      const r=n.getBoundingClientRect();return {id:Number(n.id.slice(7)),x:r.x,y:r.y,w:r.width,h:r.height};
+    }));
+    const group=(id:number)=>id<6?0:id<8?1:2;
+    const center=(c:typeof cards[number],axis:'x'|'y')=>c[axis]+(axis==='x'?c.w:c.h)/2;
+    for(const a of cards)for(const b of cards){
+      // On a wide display the crowded desktop stays relatively left, and the
+      // sparse successors read top to bottom. A portrait canvas reads vertically.
+      if(group(a.id)===0 && group(b.id)>0)
+        expect(center(a,viewport.width===1376?'x':'y')).toBeLessThan(center(b,viewport.width===1376?'x':'y'));
+      if(group(a.id)===1 && group(b.id)===2)
+        expect(center(a,viewport.width===1376?'y':'x')).toBeLessThan(center(b,viewport.width===1376?'y':'x'));
+    }
+    for(const desktop of [1,2]){
+      const gaps=cards.filter(c=>group(c.id)===desktop).flatMap(a=>cards.filter(c=>group(c.id)<desktop).map(b=>
+        Math.hypot(Math.max(0,a.x-b.x-b.w,b.x-a.x-a.w),Math.max(0,a.y-b.y-b.h,b.y-a.y-a.h))));
+      // Desktop seams use the normal 12px card gap, even when minimized or
+      // hidden windows are present. No independently packed islands remain.
+      expect(Math.min(...gaps)).toBeLessThanOrEqual(13);
     }
   }
   await page.screenshot({path:'logs/multi-display-overview/desktop-center-ownership.png'});

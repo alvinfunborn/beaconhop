@@ -1,25 +1,29 @@
 import type { Destination, OverviewPanel, NativeDesktop } from "./types";
 
+type Area = {x:number;y:number;width:number;height:number};
+type SpatialGuide = {x:number;y:number;group:string;home:Area;origin:Area};
+
 export type Tile = { x: number; y: number; width: number; height: number; preview: number; meta: number; origin?: {x:number;y:number;width:number;height:number} };
 
 // Preserve native centers and relative size, then separate only overlapping cards.
 // Layout uses the complete inventory: selection and filtering never repack it.
-export function overviewTiles(panel: OverviewPanel, windows: Destination[], width: number, height: number, stacked = false, spatialIds: string[] = []) {
+export function overviewTiles(panel: OverviewPanel, windows: Destination[], width: number, height: number, stacked = false, spatialIds: string[] = [], guides: SpatialGuide[] = []) {
   if (!windows.length || width <= 0 || height <= 0) return {columns: 1, tiles: [] as Tile[]};
   const screen = panel.display.bounds;
   const scale = Math.min(width / screen.width, height / screen.height);
   const ox = (width - screen.width * scale) / 2, oy = (height - screen.height * scale) / 2;
   const anchors = windows.map((w, i) => {
     const visible = spatialIds.includes(w.id);
-    const x = visible ? ox + (w.bounds.x - screen.x + w.bounds.width / 2) * scale : width * (i + 1) / (windows.length + 1);
-    const y = visible ? oy + (w.bounds.y - screen.y + w.bounds.height / 2) * scale : height * .9;
+    const x = guides[i]?.x ?? (visible ? ox + (w.bounds.x - screen.x + w.bounds.width / 2) * scale : width * (i + 1) / (windows.length + 1));
+    const y = guides[i]?.y ?? (visible ? oy + (w.bounds.y - screen.y + w.bounds.height / 2) * scale : height * .9);
     const aspect = Math.max(.5, Math.min(2.5, w.bounds.width / Math.max(1, w.bounds.height)));
     const w0 = Math.min(width * .8, Math.max(220, w.bounds.width * scale));
     return {x, y, width: w0, height: w0 / aspect + 32};
   });
   const tile = (x: number, y: number, w: number, h: number): Tile => ({x,y,width:w,height:h,meta:Math.min(32,h*.23),preview:h-Math.min(32,h*.23)});
-  const originals = windows.map((w,i) => spatialIds.includes(w.id)
-    ? tile(ox+(w.bounds.x-screen.x)*scale,oy+(w.bounds.y-screen.y)*scale,w.bounds.width*scale,w.bounds.height*scale)
+  const originals = windows.map((w,i) => guides[i]
+    ? tile(guides[i].origin.x,guides[i].origin.y,guides[i].origin.width,guides[i].origin.height)
+    : spatialIds.includes(w.id) ? tile(ox+(w.bounds.x-screen.x)*scale,oy+(w.bounds.y-screen.y)*scale,w.bounds.width*scale,w.bounds.height*scale)
     : tile(Math.max(0,Math.min(width-Math.min(120,width),anchors[i].x-60)),Math.max(0,height-80),Math.min(120,width),Math.min(76,height)));
   if (stacked) return {columns: 1, tiles: originals};
   const order=anchors.map((_,i)=>i).sort((a,b)=>anchors[b].width*anchors[b].height-anchors[a].width*anchors[a].height || a-b);
@@ -38,7 +42,19 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
       let best: {x:number;y:number}|null=null,score=Infinity;
       for(const c of candidates) {
         if(placed.some(p=>c.x < p.x+p.width+gap-.1 && c.x+w+gap-.1 > p.x && c.y < p.y+p.height+gap-.1 && c.y+h+gap-.1 > p.y))continue;
-        const distance=((c.x+w/2-a.x)/width)**2+((c.y+h/2-a.y)/height)**2;
+        const home=guides[index]?.home,cx=c.x+w/2,cy=c.y+h/2;
+        // Desktops constrain relative center order, never a fixed rectangle.
+        // Edges freely interleave; all windows use this same collision pass.
+        if(home && placed.some(p=>{
+          const other=guides[p.index];
+          if(!other || other.group===guides[index].group)return false;
+          const b=other.home,px=p.x+p.width/2,py=p.y+p.height/2;
+          return home.x+home.width<=b.x+.1 && cx>=px-.5
+            || b.x+b.width<=home.x+.1 && px>=cx-.5
+            || home.y+home.height<=b.y+.1 && cy>=py-.5
+            || b.y+b.height<=home.y+.1 && py>=cy-.5;
+        }))continue;
+        const distance=((cx-a.x)/width)**2+((cy-a.y)/height)**2;
         if(distance<score){best=c;score=distance;}
       }
       if(!best)return null;
@@ -54,7 +70,6 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
   return {columns:1,tiles:best.map((t,i)=>({...t,origin:originals[i]}))};
 }
 
-type Area = {x:number;y:number;width:number;height:number};
 export type DesktopAnchor = Area & {desktop:NativeDesktop; ids:string[]};
 
 // Preserve native desktop order in a weighted, two-dimensional map. A crowded
@@ -86,19 +101,37 @@ export function desktopOverviewTiles(panel:OverviewPanel, windows:Destination[],
   if(unknown.length)groups.push({desktop:{id:"__unknown",name:"",displayId:panel.display.id,displayIds:[],current:false},items:unknown});
   if(!groups.length) return {...overviewTiles(panel,windows,width,height,stacked,spatialIds),regions:[] as DesktopAnchor[]};
   const screen=panel.display.bounds;
-  const areas=desktopAreas(groups.map(g=>g.items.length || .25),{x:0,y:0,width:Math.max(0,width),height:Math.max(0,height)},screen.width/Math.max(1,screen.height));
-  const byId=new Map<string,Tile>();
+  const top=Math.min(24,height*.1),canvasHeight=Math.max(1,height-top);
+  const areas=desktopAreas(groups.map(g=>g.items.length || .25),{x:0,y:0,width:Math.max(0,width),height:canvasHeight},screen.width/Math.max(1,screen.height));
+  const byId=new Map<string,SpatialGuide>();
   groups.forEach((g,i)=>{
-    const area=areas[i],gap=Math.min(8,area.width*.04,area.height*.04),top=Math.min(28,area.height*.15);
-    const positioned=g.items.filter(w=>!w.minimized&&!w.hidden&&w.bounds.width>0&&w.bounds.height>0).map(w=>w.id);
-    const layout=overviewTiles(panel,g.items,Math.max(1,area.width-gap*2),Math.max(1,area.height-top-gap),stacked,[...new Set([...spatialIds,...positioned])]);
-    layout.tiles.forEach((t,index)=>{
-      const offset=(rect:Area)=>({...rect,x:rect.x+area.x+gap,y:rect.y+area.y+top});
-      byId.set(g.items[index].id,{...t,...offset(t),origin:t.origin ? offset(t.origin) : undefined});
+    const home=areas[i],scale=Math.min(home.width/screen.width,home.height/screen.height);
+    const ox=home.x+(home.width-screen.width*scale)/2,oy=home.y+(home.height-screen.height*scale)/2;
+    const shelf=g.items.filter(w=>w.minimized||w.hidden||w.bounds.width<=0||w.bounds.height<=0);
+    g.items.forEach(w=>{
+      const parked=shelf.includes(w);
+      const origin=parked
+        ? {x:home.x+home.width*(shelf.indexOf(w)+1)/(shelf.length+1)-Math.min(60,home.width/4),y:home.y+home.height*.85,
+          width:Math.min(120,home.width/2),height:Math.min(76,home.height*.15)}
+        : {x:ox+(w.bounds.x-screen.x)*scale,y:oy+(w.bounds.y-screen.y)*scale,width:w.bounds.width*scale,height:w.bounds.height*scale};
+      // Draw the whole scene toward its center; desktop areas are only hints
+      // for placement. Shared packing fills the space between those hints.
+      byId.set(w.id,{group:g.desktop.id,home,origin,
+        x:width/2+(origin.x+origin.width/2-width/2)*.55,
+        y:canvasHeight/2+(origin.y+origin.height/2-canvasHeight/2)*.55});
     });
   });
-  return {columns:1,tiles:windows.map(w=>byId.get(w.id)!),
-    regions:groups.map((g,i)=>({...areas[i],desktop:g.desktop,ids:g.items.map(w=>w.id)}))};
+  const positioned=windows.filter(w=>!w.minimized&&!w.hidden&&w.bounds.width>0&&w.bounds.height>0).map(w=>w.id);
+  const layout=overviewTiles(panel,windows,width,canvasHeight,stacked,[...new Set([...spatialIds,...positioned])],windows.map(w=>byId.get(w.id)!));
+  const tiles=layout.tiles.map(t=>({...t,y:t.y+top,origin:t.origin ? {...t.origin,y:t.origin.y+top} : undefined}));
+  return {...layout,tiles,regions:groups.map((g,i)=>{
+    const cards=tiles.filter((_,index)=>windows[index].desktopId===g.desktop.id || g.desktop.id==='__unknown'&&unknown.includes(windows[index]));
+    const x=cards.length ? Math.min(...cards.map(t=>t.x)) : areas[i].x;
+    const y=cards.length ? Math.min(...cards.map(t=>t.y)) : areas[i].y+top;
+    const right=cards.length ? Math.max(...cards.map(t=>t.x+t.width)) : x+areas[i].width;
+    const bottom=cards.length ? Math.max(...cards.map(t=>t.y+t.height)) : y+areas[i].height;
+    return {desktop:g.desktop,ids:g.items.map(w=>w.id),x,y:y-top,width:right-x,height:bottom-y+top};
+  })};
 }
 
 export function textRows(windows: Destination[], width: number) {

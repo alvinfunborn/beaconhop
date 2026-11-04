@@ -1149,7 +1149,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
         </div>
       ))}
       {panel && <div className="spatial-toolbar">
-        <span>{desktopRegions.length > 1 ? t("Desktop areas follow window counts · ", "桌面按窗口数量分配空间 · ") : ""}{stacked ? t("Actual positions & front-to-back order", "真实位置与前后遮挡") : t("Expanded previews · positions adjusted to avoid overlap", "展开预览 · 位置经避让调整")}</span>
+        <span>{desktopRegions.length > 1 ? t("Shared layout · relative desktop positions · ", "融合布局 · 保留桌面相对位置 · ") : ""}{stacked ? t("Actual positions & front-to-back order", "真实位置与前后遮挡") : t("Expanded previews · positions adjusted to avoid overlap", "展开预览 · 位置经避让调整")}</span>
         <button className="spatial-toggle" title={t("Restore desktop positions, sizes and occlusion", "还原桌面位置、大小与遮挡")} aria-pressed={stacked} onClick={()=>setStacked(v=>!v)}>{t("Original stack", "原始堆叠")}</button>
       </div>}
       <div className={panel ? "overview-workspace" : "switcher-workspace"}>
