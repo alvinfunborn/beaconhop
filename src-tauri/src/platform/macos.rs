@@ -1,5 +1,6 @@
 use crate::model::*;
 use std::ffi::{c_char, c_void, CStr};
+use tauri::Emitter;
 extern "C" {
     fn bh_focused() -> *mut c_char;
     fn bh_snapshot() -> *mut c_char;
@@ -105,6 +106,9 @@ pub fn show_panel(window: &tauri::WebviewWindow, search: bool) {
     let _ = window.clone().run_on_main_thread(move || {
         if let Ok(raw) = window.ns_window() {
             unsafe { bh_panel(raw, search) };
+            if search {
+                let _ = window.emit_to(window.label(), "search-focus", ());
+            }
         }
     });
 }

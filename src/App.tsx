@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { Config, Session, Permissions, Destination, DesktopPreview } from "./types";
 import { call, subscribe, defaults, native, preview, panelLabel, shareSearchDraft } from "./api";
-import { tileWindows, textRows, desktopOverviewTiles, type Tile, type DesktopRegion } from "./layout";
+import { tileWindows, textRows, desktopOverviewTiles, type Tile, type DesktopAnchor } from "./layout";
 import { presentation } from "./presentation";
 import { usePreviews } from "./previews";
 import { DesktopOverview } from "./DesktopOverview";
@@ -922,11 +922,30 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
     setStacked(false);
     setQuery(session?.query ?? "");
     setError("");
-    if (session?.mode === "search" && panelLabel === "switcher") {
-      const timer = setTimeout(() => input.current?.focus(), 0);
-      return () => clearTimeout(timer);
-    }
   }, [session?.sessionId, session?.mode]);
+  useEffect(() => {
+    if (session?.mode !== "search" || session.loading) return;
+    let disposed = false;
+    let frame = 0;
+    const off: Array<() => void> = [];
+    const focusSearch = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (!disposed) input.current?.focus({ preventScroll: true });
+      });
+    };
+    // Rendering can precede native activation. Refocus once the panel is ready,
+    // including repeated search shortcuts that keep the same session and mode.
+    if (panelLabel === "switcher") focusSearch();
+    window.addEventListener("focus", focusSearch);
+    subscribe("search-focus", focusSearch).then(f => disposed ? f() : off.push(f));
+    return () => {
+      disposed = true;
+      cancelAnimationFrame(frame);
+      window.removeEventListener("focus", focusSearch);
+      off.forEach(f => f());
+    };
+  }, [session?.sessionId, session?.mode, session?.loading]);
   useEffect(() => {
     if (!composing.current && (draftQuery.current === null || draftQuery.current === session?.query)) {
       setQuery(session?.query ?? "");
@@ -982,7 +1001,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
   const textContent = session?.layer === "tabs" && presentation(session, config.layout) === "text";
   const listLayout = config.layout === "list" || textContent;
   const desktopGrid = session?.layer === "desktops" && config.layout === "grid";
-  const tiles: {columns:number; tiles:(Tile | undefined)[]; regions?:DesktopRegion[]} = useMemo(() => panel ? (() => {
+  const tiles: {columns:number; tiles:(Tile | undefined)[]; regions?:DesktopAnchor[]} = useMemo(() => panel ? (() => {
     const all=desktopOverviewTiles(panel, localWindows, available.width, available.height, stacked, session?.spatialIds ?? [], session?.desktops);
     return {...all,tiles:visible.map(w=>all.tiles[localWindows.findIndex(a=>a.id===w.id)])};
   })() : desktopGrid ? (() => {
@@ -1143,15 +1162,15 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
           visible.some(w => w.id === session?.selected) ? "window-" + session?.selected : undefined
         }
       >
-        {desktopRegions.map(region => <div className={"desktop-region " + (region.desktop.current ? "current-desktop" : "")} key={region.desktop.id}
-          data-desktop-id={region.desktop.id} style={{left:region.x+14,top:14,width:region.width,height:available.height}}>
-          <div className="desktop-region-title"><strong>{region.desktop.id === "__unknown" ? t("Unknown desktop", "桌面归属未知") : region.desktop.label && zh ? `${region.desktop.label.fullScreen ? "全屏空间" : "桌面"} ${region.desktop.label.number}` : region.desktop.name}</strong>
+        {desktopRegions.map(region => <div className={"desktop-anchor " + (region.desktop.current ? "current-desktop" : "")} key={region.desktop.id}
+          data-desktop-id={region.desktop.id} style={{left:region.x+14,top:14,maxWidth:Math.max(1,available.width/desktopRegions.length-12)}}>
+          <div className="desktop-anchor-title"><strong>{region.desktop.id === "__unknown" ? t("Unknown desktop", "桌面归属未知") : region.desktop.label && zh ? `${region.desktop.label.fullScreen ? "全屏空间" : "桌面"} ${region.desktop.label.number}` : region.desktop.name}</strong>
             <span>{region.desktop.current ? t("Current · ", "当前 · ") : ""}{region.ids.length}</span></div>
         </div>)}
-        {panel && !stacked && <WindowSpatialOverview panel={panel} windows={spatialWindows}
+        {panel && !stacked && <WindowSpatialOverview windows={localWindows}
           highlighted={inspected ?? session?.selected ?? null} width={available.width} height={available.height}
           tile={tiles.tiles[visible.findIndex(w=>w.id===(inspected ?? session?.selected))]}
-          region={desktopRegions.find(r=>r.ids.includes(inspected ?? session?.selected ?? ""))} zh={zh} />}
+          zh={zh} />}
         {visible.map((w, index) => (
           <WindowCard
             key={`${session?.sessionId}:${w.id}`}

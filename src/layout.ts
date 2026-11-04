@@ -4,7 +4,7 @@ export type Tile = { x: number; y: number; width: number; height: number; previe
 
 // Preserve native centers and relative size, then separate only overlapping cards.
 // Layout uses the complete inventory: selection and filtering never repack it.
-export function overviewTiles(panel: OverviewPanel, windows: Destination[], width: number, height: number, stacked = false, spatialIds: string[] = []) {
+export function overviewTiles(panel: OverviewPanel, windows: Destination[], width: number, height: number, stacked = false, spatialIds: string[] = [], previewScale = 1) {
   if (!windows.length || width <= 0 || height <= 0) return {columns: 1, tiles: [] as Tile[]};
   const screen = panel.display.bounds;
   const scale = Math.min(width / screen.width, height / screen.height);
@@ -14,7 +14,7 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
     const x = visible ? ox + (w.bounds.x - screen.x + w.bounds.width / 2) * scale : width * (i + 1) / (windows.length + 1);
     const y = visible ? oy + (w.bounds.y - screen.y + w.bounds.height / 2) * scale : height * .9;
     const aspect = Math.max(.5, Math.min(2.5, w.bounds.width / Math.max(1, w.bounds.height)));
-    const w0 = Math.min(width * .8, Math.max(220, w.bounds.width * scale));
+    const w0 = Math.min(width * .8, Math.max(220, w.bounds.width * scale) * previewScale);
     return {x, y, width: w0, height: w0 / aspect + 32};
   });
   const tile = (x: number, y: number, w: number, h: number): Tile => ({x,y,width:w,height:h,meta:Math.min(32,h*.23),preview:h-Math.min(32,h*.23)});
@@ -54,36 +54,31 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
   return {columns:1,tiles:best.map((t,i)=>({...t,origin:originals[i]}))};
 }
 
-export type DesktopRegion = {desktop:NativeDesktop; ids:string[]; x:number; y:number; width:number; height:number; inset:number};
+export type DesktopAnchor = {desktop:NativeDesktop; ids:string[]; x:number};
 
 export function desktopOverviewTiles(panel:OverviewPanel, windows:Destination[], width:number, height:number, stacked:boolean, spatialIds:string[], desktops:NativeDesktop[] = []) {
   const relevant=desktops.filter(d=>d.displayIds?.length ? d.displayIds.includes(panel.display.id) : !d.displayId || d.displayId===panel.display.id);
-  if(!relevant.length) return {...overviewTiles(panel,windows,width,height,stacked,spatialIds),regions:[] as DesktopRegion[]};
-  // Native array order is the Space order, not its ID, translated name or MRU.
+  if(!relevant.length) return {...overviewTiles(panel,windows,width,height,stacked,spatialIds),regions:[] as DesktopAnchor[]};
+  // Native Space order supplies horizontal anchors, never clipping containers.
   const groups=relevant.map(desktop=>({desktop,items:windows.filter(w=>w.desktopId===desktop.id)}))
     .filter(g=>g.items.length || g.desktop.current);
   const unknown=windows.filter(w=>!relevant.some(d=>d.id===w.desktopId));
   if(unknown.length)groups.push({desktop:{id:"__unknown",name:"",displayId:panel.display.id,displayIds:[],current:false},items:unknown});
-  if(!groups.length) return {...overviewTiles(panel,windows,width,height,stacked,spatialIds),regions:[] as DesktopRegion[]};
-  const gap=Math.min(16,width/(groups.length*10));
-  const usable=Math.max(1,width-gap*(groups.length-1));
-  const weights=groups.map(g=>g.items.length ? Math.sqrt(g.items.length) : .3);
-  const total=weights.reduce((a,b)=>a+b,0);
-  const byId=new Map<string,Tile>(),regions:DesktopRegion[]=[];
-  let x=0;
-  groups.forEach((group,index)=>{
-    const laneWidth=usable*weights[index]/total,inset=Math.min(8,laneWidth*.05),top=Math.min(28,height*.1);
-    const region={desktop:group.desktop,ids:group.items.map(w=>w.id),x,y:top,width:laneWidth,height:Math.max(1,height-top),inset};
-    regions.push(region);
-    // Other desktops still provide native bounds; minimized/hidden windows use
-    // the neutral shelf. Their global z-order is not inferred here.
-    const positioned=group.items.filter(w=>!w.minimized&&!w.hidden&&w.bounds.width>0&&w.bounds.height>0).map(w=>w.id);
-    const local=overviewTiles(panel,group.items,Math.max(1,laneWidth-2*inset),region.height,stacked,[...new Set([...spatialIds,...positioned])]);
-    local.tiles.forEach((t,i)=>byId.set(group.items[i].id,{...t,x:t.x+x+inset,y:t.y+top,
-      origin:t.origin ? {...t.origin,x:t.origin.x+x+inset,y:t.origin.y+top} : undefined}));
-    x+=laneWidth+gap;
-  });
-  return {columns:1,tiles:windows.map(w=>byId.get(w.id)!),regions};
+  if(!groups.length) return {...overviewTiles(panel,windows,width,height,stacked,spatialIds),regions:[] as DesktopAnchor[]};
+  const screen=panel.display.bounds;
+  const step=screen.width;
+  const scene={...screen,width:screen.width+step*(groups.length-1)};
+  const top=Math.min(28,height*.1),canvasHeight=Math.max(1,height-top);
+  const scale=Math.min(width/scene.width,canvasHeight/scene.height);
+  const ox=(width-scene.width*scale)/2;
+  const offsets=new Map(groups.flatMap((g,i)=>g.items.map(w=>[w.id,i*step] as const)));
+  const projected=windows.map(w=>({...w,bounds:{...w.bounds,x:w.bounds.x+(offsets.get(w.id) ?? 0)}}));
+  // Pack every desktop together. Cards can cross desktop anchors and use all
+  // available space; the native window centers remain the placement preference.
+  const positioned=windows.filter(w=>!w.minimized&&!w.hidden&&w.bounds.width>0&&w.bounds.height>0).map(w=>w.id);
+  const layout=overviewTiles({...panel,display:{...panel.display,bounds:scene}},projected,width,canvasHeight,stacked,[...new Set([...spatialIds,...positioned])],Math.min(3,groups.length));
+  return {...layout,tiles:layout.tiles.map(t=>({...t,y:t.y+top,origin:t.origin ? {...t.origin,y:t.origin.y+top} : undefined})),
+    regions:groups.map((g,i)=>({desktop:g.desktop,ids:g.items.map(w=>w.id),x:ox+(i*step+screen.width/2)*scale}))};
 }
 
 export function textRows(windows: Destination[], width: number) {

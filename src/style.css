@@ -1050,8 +1050,8 @@ textarea {
 .continuation-selected, .continuation-add { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
 .continuation-add select { min-width: 0; max-width: 170px; }
 
-.desktop-region { position:absolute; pointer-events:none; z-index:-1; border:1px solid var(--line); border-radius:9px; background:color-mix(in srgb,var(--panel) 12%,transparent); overflow:hidden; }
-.desktop-region.current-desktop { border-color:color-mix(in srgb,var(--accent) 45%,transparent); background:color-mix(in srgb,var(--accent) 3%,transparent); }
-.desktop-region-title { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:6px 8px; font-size:11px; color:var(--muted); }
-.desktop-region-title strong { font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.desktop-region-title span { flex-shrink:0; font-size:10px; }
+.desktop-anchor { position:absolute; pointer-events:none; z-index:0; transform:translateX(-50%); color:var(--muted); }
+.desktop-anchor.current-desktop { color:var(--accent); }
+.desktop-anchor-title { display:flex; align-items:center; gap:6px; font-size:11px; }
+.desktop-anchor-title strong { font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.desktop-anchor-title span { flex-shrink:0; font-size:10px; }

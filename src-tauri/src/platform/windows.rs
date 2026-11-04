@@ -576,6 +576,7 @@ pub fn show_panel(window: &tauri::WebviewWindow, search: bool) {
     if search {
         let _ = window.show();
         let _ = window.set_focus();
+        let _ = tauri::Emitter::emit_to(window, window.label(), "search-focus", ());
     } else if let Ok(hwnd) = window.hwnd() {
         unsafe {
             let _ = ShowWindow(HWND(hwnd.0), SW_SHOWNOACTIVATE);

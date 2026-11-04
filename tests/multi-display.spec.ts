@@ -14,6 +14,7 @@ async function fixture(page: Page) {
         return originalCall(name,args);
       };
       window.__changeOverview=(mutate)=>{mutate(session);session.revision++;emit('session',session);};
+      window.__overviewEvent=(name)=>emit(name,null);
     `});
   });
 }
@@ -88,6 +89,39 @@ test('search drafts mirror between monitors during IME and after focus moves',as
   await secondInput.fill('');await expect(firstInput).toHaveValue('');
 });
 
+test('search takes keyboard focus after loading, native activation and repeated shortcuts',async({page})=>{
+  await fixture(page);await page.goto(left);
+  await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{s.mode='search';s.loading=true;}));
+  const input=page.getByRole('textbox',{name:'Search windows'});
+  await expect(input).toBeDisabled();
+  await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{s.loading=false;}));
+  await expect(input).toBeFocused();
+  await page.getByRole('button',{name:'Original stack'}).click();
+  await expect(input).not.toBeFocused();
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await expect(input).toBeFocused();
+  await page.getByRole('button',{name:'Original stack'}).click();
+  await page.evaluate(()=> (window as any).__overviewEvent('search-focus'));
+  await expect(input).toBeFocused();
+  await page.keyboard.type('Safari');
+  await expect(input).toHaveValue('Safari');
+  await expect(page.getByRole('option')).toHaveCount(1);
+  // Ordinary search publications must preserve focus on a control the user chose.
+  await page.getByRole('button',{name:'Original stack'}).click();
+  await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{s.query='Terminal';}));
+  await expect(input).not.toBeFocused();
+});
+
+test('secondary search fields focus only when their own panel becomes active',async({page})=>{
+  await fixture(page);await page.goto(right);await api(page,'open_search');
+  const input=page.getByRole('textbox',{name:'Search windows'});
+  await expect(input).not.toBeFocused();
+  await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await expect(input).toBeFocused();
+  await page.keyboard.type('Terminal');
+  await expect(input).toHaveValue('Terminal');
+});
+
 test('dense and portrait inventories fit all previews without a scrolling rail',async({page})=>{
   await fixture(page);await page.setViewportSize({width:1376,height:804});await page.goto(left);
   await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{
@@ -128,7 +162,7 @@ test('spatial hints stay centered and arrows follow final positions even during 
   await input.press('ArrowLeft');await expect(page.locator('#window-2')).toHaveAttribute('aria-selected','true');
 });
 
-test('native desktop order separates window groups and survives search and stacking',async({page})=>{
+test('native desktop order anchors one continuous canvas and survives search and stacking',async({page})=>{
   await fixture(page);await page.setViewportSize({width:1376,height:804});await page.goto(left);
   await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{
     s.desktops=[
@@ -144,28 +178,48 @@ test('native desktop order separates window groups and survives search and stack
     });
     s.overview[0].slots=s.windows.map((w:any)=>w.id);s.overview[1].slots=[];s.spatialIds=['2','5'];s.selected='0';
   }));
-  await expect(page.locator('.desktop-region')).toHaveCount(3);await assertFits(page,6);
-  expect(await page.locator('.desktop-region').evaluateAll(nodes=>nodes.map(n=>(n as HTMLElement).dataset.desktopId))).toEqual(['9','2','17']);
-  const rects=await page.locator('.desktop-region').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return {x:r.x,right:r.right};}));
-  for(const [i,ids] of [['1','4'],['2','5'],['0','3']].entries())for(const id of ids){
-    const b=(await page.locator('#window-'+id).boundingBox())!;
-    expect(b.x).toBeGreaterThanOrEqual(rects[i].x);expect(b.x+b.width).toBeLessThanOrEqual(rects[i].right);
-  }
+  await expect(page.locator('.desktop-anchor')).toHaveCount(3);await assertFits(page,6);
+  expect(await page.locator('.desktop-anchor').evaluateAll(nodes=>nodes.map(n=>(n as HTMLElement).dataset.desktopId))).toEqual(['9','2','17']);
+  // Desktop labels are reference points; all cards share one packing area.
+  const centers=await page.locator('.desktop-anchor').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return r.x+r.width/2;}));
+  expect(centers[0]).toBeLessThan(centers[1]);expect(centers[1]).toBeLessThan(centers[2]);
+  await expect(page.locator('.desktop-region')).toHaveCount(0);
   const before=await page.locator('#window-2').boundingBox();
   await page.getByRole('button',{name:'Original stack',exact:true}).click();
   const stacked=(await page.locator('#window-2').boundingBox())!;
-  expect(stacked.x).toBeGreaterThanOrEqual(rects[1].x);expect(stacked.x+stacked.width).toBeLessThanOrEqual(rects[1].right);
+  expect(stacked.width).toBeGreaterThan(0);
+  const originalCenters=await Promise.all(['1','2','0'].map(async id=>{const r=(await page.locator('#window-'+id).boundingBox())!;return r.x+r.width/2;}));
+  expect(originalCenters[0]).toBeLessThan(originalCenters[1]);expect(originalCenters[1]).toBeLessThan(originalCenters[2]);
   await page.getByRole('button',{name:'Original stack',exact:true}).click();
   await api(page,'open_search');await page.getByRole('textbox').fill('Safari');
   await expect(page.getByRole('option')).toHaveCount(1);expect(await page.locator('#window-2').boundingBox()).toEqual(before);
-  await expect(page.locator('.desktop-region')).toHaveCount(3);
+  await expect(page.locator('.desktop-anchor')).toHaveCount(3);
   await page.getByRole('textbox').fill('');
   await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{s.selected='1';}));
   await page.getByRole('textbox').press('ArrowRight');
   expect(['2','5']).toContain((await api(page,'get_session') as any).selected);
   const config=await api(page,'get_settings');await api(page,'save_settings',{config:{...config as any,language:'zh'}});
-  await expect(page.locator('.desktop-region-title')).toContainText(['桌面 1','全屏空间 2','桌面 3']);
+  await expect(page.locator('.desktop-anchor-title')).toContainText(['桌面 1','全屏空间 2','桌面 3']);
   await page.screenshot({path:'logs/multi-display-overview/desktops-spatial-zh.png'});
+  await page.setViewportSize({width:760,height:1000});await assertFits(page,6);
+});
+
+test('uneven desktops share free space across desktop reference points',async({page})=>{
+  await fixture(page);await page.setViewportSize({width:1376,height:804});await page.goto(left);
+  await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{
+    s.desktops=[{id:'left',name:'Left desktop',displayId:'1',current:true},{id:'right',name:'Right desktop',displayId:'1',current:false}];
+    s.windows.forEach((w:any,i:number)=>{
+      w.desktopId=i===0?'left':'right';w.displayId='1';w.currentDesktop=i===0;w.minimized=false;w.hidden=false;
+      w.bounds={x:-1340+(i%2)*100,y:70+(i%3)*90,width:1100,height:700};
+    });
+    s.overview[0].slots=s.windows.map((w:any)=>w.id);s.overview[1].slots=[];s.spatialIds=['0'];
+  }));
+  await expect(page.locator('.desktop-anchor')).toHaveCount(2);await assertFits(page,6);
+  const centers=await page.locator('.desktop-anchor').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return r.x+r.width/2;}));
+  const boundary=(centers[0]+centers[1])/2;
+  const boxes=await page.getByRole('option').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return {left:r.x,right:r.right};}));
+  expect(boxes.some(b=>b.left<boundary-8&&b.right>boundary+8)).toBe(true);
+  await page.screenshot({path:'logs/multi-display-overview/desktops-continuous-uneven.png'});
   await page.setViewportSize({width:760,height:1000});await assertFits(page,6);
 });
 
@@ -181,8 +235,8 @@ test('desktop membership supports shared displays, an empty current desktop and 
     ];
     s.windows[3].desktopId='last';s.windows[4].desktopId='shared';s.windows[5].desktopId='missing';
   }));
-  await expect(page.locator('.desktop-region')).toHaveCount(4);await assertFits(page,3);
-  expect(await page.locator('.desktop-region').evaluateAll(nodes=>nodes.map(n=>(n as HTMLElement).dataset.desktopId))).toEqual(['shared','empty','last','__unknown']);
+  await expect(page.locator('.desktop-anchor')).toHaveCount(4);await assertFits(page,3);
+  expect(await page.locator('.desktop-anchor').evaluateAll(nodes=>nodes.map(n=>(n as HTMLElement).dataset.desktopId))).toEqual(['shared','empty','last','__unknown']);
   await expect(page.locator('[data-desktop-id="empty"]')).toContainText('Current · 0');
   await expect(page.locator('[data-desktop-id="__unknown"]')).toContainText('Unknown desktop');
 });
