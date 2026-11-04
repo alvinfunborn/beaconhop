@@ -204,7 +204,7 @@ test('native desktop order anchors one continuous canvas and survives search and
   await page.setViewportSize({width:760,height:1000});await assertFits(page,6);
 });
 
-test('uneven desktops share free space across desktop reference points',async({page})=>{
+test('uneven desktops preserve ownership without desktop containers',async({page})=>{
   await fixture(page);await page.setViewportSize({width:1376,height:804});await page.goto(left);
   await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{
     s.desktops=[{id:'left',name:'Left desktop',displayId:'1',current:true},{id:'right',name:'Right desktop',displayId:'1',current:false}];
@@ -218,9 +218,41 @@ test('uneven desktops share free space across desktop reference points',async({p
   const centers=await page.locator('.desktop-anchor').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return r.x+r.width/2;}));
   const boundary=(centers[0]+centers[1])/2;
   const boxes=await page.getByRole('option').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return {left:r.x,right:r.right};}));
-  expect(boxes.some(b=>b.left<boundary-8&&b.right>boundary+8)).toBe(true);
+  expect((boxes[0].left+boxes[0].right)/2).toBeLessThan(boundary);
+  for(const b of boxes.slice(1))expect((b.left+b.right)/2).toBeGreaterThan(boundary);
+  await expect(page.locator('.desktop-region')).toHaveCount(0);
   await page.screenshot({path:'logs/multi-display-overview/desktops-continuous-uneven.png'});
   await page.setViewportSize({width:760,height:1000});await assertFits(page,6);
+});
+
+test('crowded desktop keeps all six centers near its own label, including hidden and minimized windows',async({page})=>{
+  await fixture(page);await page.goto(left);
+  await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{
+    s.desktops=['one','two','three'].map((id,i)=>({id,name:'Desktop '+(i+1),displayId:'1',current:i===0}));
+    const template=s.windows[0];
+    s.windows=Array.from({length:10},(_,i)=>({...template,id:String(i),title:'Window '+i,
+      desktopId:i<6?'one':i<8?'two':'three',displayId:'1',currentDesktop:i<6,
+      minimized:false,hidden:false,bounds:{x:-1350+(i%2)*80,y:90+(i%3)*50,width:1100,height:700}}));
+    s.resultIds=s.windows.map((w:any)=>w.id);s.overview[0].slots=s.resultIds;s.overview[1].slots=[];
+    s.spatialIds=['0','1','2','3'];
+  }));
+  for(const viewport of [{width:1376,height:804},{width:760,height:1000}]){
+    if(viewport.width===760){
+      await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{s.windows[4].minimized=true;s.windows[5].hidden=true;}));
+      await expect(page.locator('#window-4 .spatial-depth')).toHaveText('Minimized');
+      await expect(page.locator('#window-5 .spatial-depth')).toHaveText('Hidden');
+    }
+    await page.setViewportSize(viewport);await assertFits(page,10);
+    const labels=await page.locator('.desktop-anchor').evaluateAll(nodes=>nodes.map(n=>{const b=n.getBoundingClientRect();return b.x+b.width/2;}));
+    const boundaries=[(labels[0]+labels[1])/2,(labels[1]+labels[2])/2];
+    for(let i=0;i<10;i++){
+      const b=(await page.locator('#window-'+i).boundingBox())!,center=b.x+b.width/2;
+      if(i<6)expect(center,'Desktop 1 window '+i).toBeLessThan(boundaries[0]);
+      else if(i<8){expect(center).toBeGreaterThan(boundaries[0]);expect(center).toBeLessThan(boundaries[1]);}
+      else expect(center).toBeGreaterThan(boundaries[1]);
+    }
+  }
+  await page.screenshot({path:'logs/multi-display-overview/desktop-center-ownership.png'});
 });
 
 test('desktop membership supports shared displays, an empty current desktop and unknown ownership',async({page})=>{
