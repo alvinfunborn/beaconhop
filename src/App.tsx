@@ -1149,7 +1149,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
         </div>
       ))}
       {panel && <div className="spatial-toolbar">
-        <span>{desktopRegions.length > 1 ? t("Desktops from left to right · ", "桌面从左到右 · ") : ""}{stacked ? t("Actual positions & front-to-back order", "真实位置与前后遮挡") : t("Expanded previews · positions adjusted to avoid overlap", "展开预览 · 位置经避让调整")}</span>
+        <span>{desktopRegions.length > 1 ? t("Desktop areas follow window counts · ", "桌面按窗口数量分配空间 · ") : ""}{stacked ? t("Actual positions & front-to-back order", "真实位置与前后遮挡") : t("Expanded previews · positions adjusted to avoid overlap", "展开预览 · 位置经避让调整")}</span>
         <button className="spatial-toggle" title={t("Restore desktop positions, sizes and occlusion", "还原桌面位置、大小与遮挡")} aria-pressed={stacked} onClick={()=>setStacked(v=>!v)}>{t("Original stack", "原始堆叠")}</button>
       </div>}
       <div className={panel ? "overview-workspace" : "switcher-workspace"}>
@@ -1162,8 +1162,12 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
           visible.some(w => w.id === session?.selected) ? "window-" + session?.selected : undefined
         }
       >
+        {desktopRegions.map((region,index) => <div className="desktop-wash" key={"wash-"+region.desktop.id}
+          data-desktop-id={region.desktop.id} aria-hidden="true"
+          style={{left:region.x+14,top:region.y+14,width:region.width,height:region.height,
+            "--desktop-color":`hsl(${[258,186,34,330,115,215][index%6]} 65% 65%)`} as CSSProperties} />)}
         {desktopRegions.map(region => <div className={"desktop-anchor " + (region.desktop.current ? "current-desktop" : "")} key={region.desktop.id}
-          data-desktop-id={region.desktop.id} style={{left:region.x+14,top:14,maxWidth:Math.max(1,available.width/desktopRegions.length-12)}}>
+          data-desktop-id={region.desktop.id} style={{left:region.x+region.width/2+14,top:region.y+18,maxWidth:Math.max(1,region.width-16)}}>
           <div className="desktop-anchor-title"><strong>{region.desktop.id === "__unknown" ? t("Unknown desktop", "桌面归属未知") : region.desktop.label && zh ? `${region.desktop.label.fullScreen ? "全屏空间" : "桌面"} ${region.desktop.label.number}` : region.desktop.name}</strong>
             <span>{region.desktop.current ? t("Current · ", "当前 · ") : ""}{region.ids.length}</span></div>
         </div>)}
@@ -1182,6 +1186,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
             depth={panel ? (session?.spatialIds?.includes(w.id) ? session.spatialIds.length - session.spatialIds.indexOf(w.id) : 1) : undefined}
             nativeStack={session?.spatialIds?.includes(w.id)}
             selected={w.id === session?.selected}
+            departure={w.id === session?.origin?.id}
             hintStyle={config.hintStyle}
             thumbnails={config.thumbnails && (!listLayout || !!panel) && !w.desktopTarget}
             textContent={textContent}
@@ -1259,6 +1264,7 @@ function WindowCard({
   depth,
   nativeStack,
   selected,
+  departure,
   thumbnails,
   textContent,
   hintStyle,
@@ -1276,6 +1282,7 @@ function WindowCard({
   depth?: number;
   nativeStack?: boolean;
   selected: boolean;
+  departure: boolean;
   thumbnails: boolean;
   textContent: boolean;
   hintStyle: Config["hintStyle"];
@@ -1356,7 +1363,8 @@ function WindowCard({
       id={"window-" + w.id}
       role="option"
       aria-selected={selected}
-      className={"window-card " + (depth !== undefined ? "spatial-card " : "") + (selected ? "selected " : "") + (tile && tile.meta < 40 ? "dense" : "")}
+      data-origin={departure || undefined}
+      className={"window-card " + (depth !== undefined ? "spatial-card " : "") + (selected ? "selected " : "") + (departure ? "departure " : "") + (tile && tile.meta < 40 ? "dense" : "")}
       style={tile ? { zIndex: depth, left: tile.x + 14, top: tile.y + 14, width: tile.width, height: tile.height,
         "--tile-preview": `${tile.preview}px`, "--tile-meta": `${tile.meta}px`,
         "--hint-size": `${Math.max(8, Math.min(
@@ -1410,6 +1418,10 @@ function WindowCard({
           </p>
           {textContent && w.content?.description && <p className="target-description">{w.content.description}</p>}
         </div>
+        {(selected || departure) && <span className="card-state">
+          {departure && <span className="departure-badge">{zh ? "出发窗口" : "Origin"}</span>}
+          {selected && <span className="selection-badge">{zh ? "将切换" : "Selected"}</span>}
+        </span>}
         {selected && <span className="selected-arrow"><Icon name="hop" size={16} /></span>}
       </div>
     </button>

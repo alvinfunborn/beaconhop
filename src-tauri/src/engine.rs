@@ -641,7 +641,30 @@ impl Engine {
             self.load_delta += delta;
             return;
         }
-        let ids: Vec<_> = self.results().iter().map(|w| w.window.id.clone()).collect();
+        let mut ids: Vec<_> = self.results().iter().map(|w| w.window.id.clone()).collect();
+        // The opening selection is still MRU. Subsequent Tab steps follow the
+        // final packed thumbnails, one physical display at a time. Until all
+        // panels have published geometry, retain the complete saved slot order.
+        if ids.iter().all(|id| self.navigation.contains_key(id)) {
+            let order = |group: Vec<&String>| {
+                crate::navigation::reading_order(
+                    group
+                        .into_iter()
+                        .map(|id| (id.as_str(), &self.navigation[id])),
+                )
+            };
+            let mut ordered = Vec::with_capacity(ids.len());
+            for panel in &self.session.overview {
+                ordered.extend(order(
+                    ids.iter()
+                        .filter(|id| panel.slots.iter().any(|slot| slot.as_ref() == Some(id)))
+                        .collect(),
+                ));
+            }
+            let remaining = ids.iter().filter(|id| !ordered.contains(id)).collect();
+            ordered.extend(order(remaining));
+            ids = ordered;
+        }
         if ids.is_empty() {
             self.session.selected = None;
             return;
@@ -1765,6 +1788,85 @@ mod tests {
             assert!(e.handle(key(direction, ALT, false)).consumed);
         }
     }
+    #[test]
+    fn tab_follows_rendered_rows_per_monitor_after_the_initial_recent_target() {
+        let mut e = engine(6);
+        e.snapshot.displays = vec![
+            Display {
+                id: "a".into(),
+                bounds: Bounds {
+                    x: -1200.,
+                    y: 0.,
+                    width: 1200.,
+                    height: 900.,
+                },
+                scale: 1.,
+                ..Default::default()
+            },
+            Display {
+                id: "b".into(),
+                bounds: Bounds {
+                    x: 0.,
+                    y: -900.,
+                    width: 1200.,
+                    height: 900.,
+                },
+                scale: 1.,
+                ..Default::default()
+            },
+        ];
+        e.observe_focus(Some("1".into()));
+        e.observe_focus(Some("0".into()));
+        e.open(Mode::Held, false);
+        assert_eq!(e.session.selected.as_deref(), Some("1")); // First hop stays MRU.
+        let origin = e.session.origin.clone().unwrap().id;
+        let hints: Vec<_> = e.session.windows.iter().map(|w| w.hint.clone()).collect();
+        for (id, x, y) in [
+            ("0", -600., 8.),
+            ("2", -1000., 0.),
+            ("4", -1000., 240.),
+            ("1", 600., -800.),
+            ("3", 100., -800.),
+            ("5", 100., -600.),
+        ] {
+            e.navigation.insert(
+                id.into(),
+                Bounds {
+                    x,
+                    y,
+                    width: 180.,
+                    height: 120.,
+                },
+            );
+        }
+        // Left monitor: 2,0,4. Right monitor: 3,1,5, despite being higher.
+        for wanted in ["5", "2", "0", "4", "3", "1"] {
+            e.navigate(1);
+            assert_eq!(e.session.selected.as_deref(), Some(wanted));
+        }
+        for wanted in ["3", "4", "0", "2", "5", "1"] {
+            e.navigate(-1);
+            assert_eq!(e.session.selected.as_deref(), Some(wanted));
+        }
+        assert_eq!(e.session.origin.as_ref().unwrap().id, origin);
+        assert_eq!(
+            e.session
+                .windows
+                .iter()
+                .map(|w| w.hint.clone())
+                .collect::<Vec<_>>(),
+            hints
+        );
+        // Filters remove targets without resetting the remaining geometric order.
+        e.session
+            .windows
+            .retain(|w| ["2", "4", "1"].contains(&w.window.id.as_str()));
+        e.navigate(1);
+        assert_eq!(e.session.selected.as_deref(), Some("2"));
+        e.navigate(-1);
+        assert_eq!(e.session.selected.as_deref(), Some("1"));
+    }
+
     #[test]
     fn directional_edges_do_not_wrap_through_tab_order() {
         let mut e = engine(3);

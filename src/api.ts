@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, emit as nativeEmit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Config, Session, Permissions } from "./types";
+import { readingOrder } from "./navigation";
 import { defaultScreenBuoy } from "./hintKeys";
 export const native = isTauri();
 export const preview =
@@ -88,6 +89,7 @@ let session: Session = {
   error: null,
   warnings: [],
 };
+session.origin = structuredClone(session.windows[0]);
 if (preview && new URLSearchParams(location.search).has("layer")) {
   session.layer = new URLSearchParams(location.search).get("layer") as Session["layer"];
   if (session.layer === "tabs") {
@@ -247,12 +249,16 @@ export async function call<T>(
       session.selected=options[0]?.id ?? session.selected;session.revision++;emit("session",session);break;
     }
     case "navigate": {
-      const i = session.resultIds.indexOf(session.selected ?? "");
-      session.selected =
-        session.resultIds[
-          (i + Number(args.delta) + session.resultIds.length) %
-            session.resultIds.length
-        ];
+      const ids = session.resultIds;
+      let ordered = ids;
+      if (ids.every(id => rectangles[id])) {
+        const groups = (session.overview ?? []).map(panel => ids.filter(id => panel.slots.includes(id)));
+        const assigned = new Set(groups.flat());
+        groups.push(ids.filter(id => !assigned.has(id)));
+        ordered = groups.flatMap(group => readingOrder(group.map(id => ({id,...rectangles[id]}))));
+      }
+      const i = Math.max(0, ordered.indexOf(session.selected ?? ""));
+      session.selected = ordered.length ? ordered[((i + Number(args.delta)) % ordered.length + ordered.length) % ordered.length] : null;
       session.revision++;
       emit("session", session);
       break;

@@ -68,6 +68,7 @@ export type NativeDesktop = {
   label?: {number:number; fullScreen:boolean} | null;
 };
 export type Session = {
+  origin?: Destination | null;
   desktops?: NativeDesktop[];
   overview?: OverviewPanel[];
   spatialIds?: string[];

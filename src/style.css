@@ -1055,3 +1055,31 @@ textarea {
 .desktop-anchor-title { display:flex; align-items:center; gap:6px; font-size:11px; }
 .desktop-anchor-title strong { font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .desktop-anchor-title span { flex-shrink:0; font-size:10px; }
+
+/* Solid selection and dashed departure remain distinct even on busy previews. */
+.window-card.departure {
+  border: 1px dashed #35cbb9;
+  outline: 2px dashed #35cbb9;
+  outline-offset: 1px;
+}
+.window-card.selected {
+  border-color: var(--accent);
+  outline: 3px solid var(--accent);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 7px var(--accent-soft), 0 18px 36px #0008;
+}
+.window-card.selected .window-meta {
+  background: color-mix(in srgb, var(--accent) 22%, var(--panel));
+}
+.card-state { display: flex; gap: 3px; flex: none; font-size: 9px; line-height: 1.2; font-weight: 750; }
+.card-state > span { padding: 2px 4px; border-radius: 3px; white-space: nowrap; }
+.departure-badge { color: #a0ffed; background: #07564e; border: 1px dashed #35cbb9; }
+.selection-badge { color: var(--panel); background: var(--accent); border: 1px solid var(--accent); }
+.window-card.selected .selected-arrow { color: var(--panel); background: var(--accent); border-radius: 4px; padding: 2px; }
+
+.desktop-wash {
+  position: absolute;
+  pointer-events: none;
+  z-index: 0;
+  background: radial-gradient(ellipse at center, color-mix(in srgb, var(--desktop-color) 19%, transparent), color-mix(in srgb, var(--desktop-color) 10%, transparent) 45%, transparent 75%);
+}

@@ -1,5 +1,29 @@
 use crate::model::Bounds;
 
+// Cluster approximately aligned top edges into rows, then read each row left to
+// right. Keep the row's first rectangle as its anchor: a tall card must not
+// bridge several rows, and a pairwise fuzzy comparator would not be transitive.
+pub fn reading_order<'a>(candidates: impl Iterator<Item = (&'a str, &'a Bounds)>) -> Vec<String> {
+    let mut pending: Vec<_> = candidates.collect();
+    pending.sort_by(|a, b| a.1.y.total_cmp(&b.1.y).then_with(|| a.0.cmp(b.0)));
+    let mut ordered = Vec::with_capacity(pending.len());
+    while !pending.is_empty() {
+        let anchor = pending[0].1;
+        let (mut row, rest): (Vec<_>, Vec<_>) = pending
+            .into_iter()
+            .partition(|(_, b)| b.y - anchor.y <= anchor.height.min(b.height) * 0.35);
+        row.sort_by(|a, b| {
+            a.1.x
+                .total_cmp(&b.1.x)
+                .then_with(|| a.1.y.total_cmp(&b.1.y))
+                .then_with(|| a.0.cmp(b.0))
+        });
+        ordered.extend(row.into_iter().map(|(id, _)| id.to_owned()));
+        pending = rest;
+    }
+    ordered
+}
+
 // Follow the displayed rectangles. A shared horizontal/vertical lane wins;
 // otherwise use a forward 90-degree cone. No target means the edge is reached.
 pub fn neighbor<'a>(
@@ -59,6 +83,19 @@ mod tests {
             width: w,
             height: h,
         }
+    }
+    #[test]
+    fn reading_rows_handle_uneven_sizes_offsets_and_tall_cards_without_chaining() {
+        let a = rect(300., -100., 180., 400.);
+        let b = rect(-300., -92., 180., 100.);
+        let c = rect(-200., 30., 180., 100.);
+        let d = rect(200., 60., 180., 100.);
+        let e = rect(-300., 90., 180., 100.);
+        assert_eq!(
+            reading_order([("e", &e), ("d", &d), ("a", &a), ("c", &c), ("b", &b)].into_iter()),
+            ["b", "a", "c", "d", "e"]
+        );
+        assert!(reading_order(std::iter::empty()).is_empty());
     }
     #[test]
     fn uneven_rows_use_the_aligned_neighbor_in_all_directions() {
