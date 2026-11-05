@@ -1,6 +1,38 @@
 # BeaconHop validation ledger
 
-Updated: 2026-11-02. Source implementation, packaged builds and native acceptance are separate. Dated entries describe their respective build, not necessarily the current executable.
+Updated: 2026-11-05. Source implementation, packaged builds and native acceptance are separate. Dated entries describe their respective build, not necessarily the current executable.
+
+## 2026-11-05 off-desktop window inventory recovery
+
+The installed overview omitted two real VS Code windows on inactive desktops 3
+and 4, although WindowServer still reported both. Remote AX discovery retained
+its old scan cursor after cached roots disappeared, so an older element behind
+that cursor could not be found again. Changed missing-window targets now restart
+the bounded sweep; unchanged searches continue across inventories. Completed
+inventories clear obsolete retry and backoff state.
+
+The read-only native regression `python3 scripts/macos-inventory-recovery.py PID
+WINDOW_ID` compiles the actual bridge, discovers an existing inactive-Space
+window, and simulates candidate omission and AX root eviction within its own
+cache. It does not activate or move the target. Against the same native window,
+the old bridge failed recovery after omission; the fixed bridge passed both
+recovery cases and stale-retry cleanup. The fixed bridge also passed against the
+second missing window. This simulates cache loss without locking the user's Mac;
+an actual lock/unlock cycle was not performed.
+
+Validation: 117 Rust tests passed, two ignored, and the debug macOS app/DMG build
+passed. The installed app retained its signing requirement and byte-identical
+BH/SB settings. Both previously missing native IDs reappeared with their original
+desktop and display memberships. Evidence and installation backup are under
+ignored `logs/cross-desktop-20261105/`; regression receipts are under ignored
+`logs/inventory-recovery-*/`.
+
+Native overview acceptance found all 26 thumbnails across two physical displays,
+including both recovered inactive-desktop targets. A full forward Tab cycle
+visited every thumbnail once; Shift+Tab reversed all 26 steps. The test cancelled
+back to inactive mode. AX rounds WebView bounds to integer pixels, so a previous
+strict row-order comparison was ambiguous at a row threshold; the completed
+native check verifies complete traversal and exact reversal instead.
 
 ## 2026-11-02 browser bridge resets, website icons and hint spacing
 

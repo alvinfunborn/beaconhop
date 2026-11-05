@@ -45,18 +45,26 @@ private func windows(_ pid: pid_t, candidates: Set<UInt32>, spaceWindows: Set<UI
     }
     for element in published { let id = windowID(element); if candidates.contains(id) {found[id] = element} }
     var missing = spaceWindows.subtracting(found.keys)
+    if missing.isEmpty {
+        // Published AX roots can complete a search without entering the sweep.
+        // Do not leave an obsolete retry/cursor for a later loss of that root.
+        scanCursor.removeValue(forKey:pid)
+        scanRetries.removeValue(forKey:pid)
+    }
     let now = DispatchTime.now().uptimeNanoseconds
     let previous = scanRetries[pid]
     let changed = previous?.missing != missing
     if !missing.isEmpty, (changed || now >= (previous?.next ?? 0)), let create = remoteElement {
         // Remote AX token ABI: little-endian process, reserved, AppKit tag, element id.
-        // Continue each process's sweep on later inventories instead of repeating a prefix.
+        // Continue an unchanged search across inventories. A newly missing root
+        // can have an older element id (e.g. after a transient WindowServer
+        // omission or AX invalidation), so changed targets must restart the sweep.
         var token = Data(); var process = pid.littleEndian; var reserved: UInt32 = 0; var tag: UInt32 = 0x636f636f
         withUnsafeBytes(of:&process) {token.append(contentsOf:$0)}
         withUnsafeBytes(of:&reserved) {token.append(contentsOf:$0)}
         withUnsafeBytes(of:&tag) {token.append(contentsOf:$0)}
         token.append(Data(count:8))
-        var cursor = scanCursor[pid] ?? 0
+        var cursor = changed ? 0 : (scanCursor[pid] ?? 0)
         let deadline = DispatchTime.now().uptimeNanoseconds + 35_000_000
         while !missing.isEmpty && DispatchTime.now().uptimeNanoseconds < deadline {
             var identifier = cursor.littleEndian
