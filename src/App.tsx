@@ -5,6 +5,7 @@ import { call, subscribe, defaults, native, preview, panelLabel, shareSearchDraf
 import { tileWindows, textRows, desktopOverviewTiles, type Tile, type DesktopAnchor } from "./layout";
 import { presentation } from "./presentation";
 import { usePreviews } from "./previews";
+import { timing, afterFrame } from "./performance";
 import { DesktopOverview } from "./DesktopOverview";
 import { WindowSpatialOverview, intersects } from "./WindowSpatialOverview";
 import { Updates } from "./Updates";
@@ -795,10 +796,15 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
   const draftQuery = useRef<string | null>(null);
   const [stacked, setStacked] = useState(false);
   const list = useRef<HTMLDivElement>(null);
+  const measuredSession = useRef<number>();
   useEffect(() => {
     let disposed = false;
     let off = () => {};
-    const accept = (s: Session) =>
+    const accept = (s: Session) => {
+      if (s.mode !== "inactive" && measuredSession.current !== s.sessionId) {
+        measuredSession.current = s.sessionId;
+        timing("session_received", s.sessionId, 0, s.windows.length);
+      }
       setSession((old) =>
         !old ||
         s.sessionId > old.sessionId ||
@@ -806,6 +812,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
           ? s
           : old,
       );
+    };
     subscribe<Session>("session", accept).then((f) =>
       disposed ? f() : (off = f),
     );
@@ -868,16 +875,22 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
     setQuery(value);
     shareSearchDraft(session?.sessionId ?? 0,value).catch(()=>{});
   }
-  const [available, setAvailable] = useState({ width: 0, height: 0 });
-  useEffect(() => {
+  const panel = session?.overview?.find(p => p.label === panelLabel);
+  const overviewMode = !!panel;
+  const [available, setAvailable] = useState({ width: 0, height: 0, overview: false });
+  useLayoutEffect(() => {
     const node = list.current;
     if (!node) return;
-    const refresh = () => setAvailable({ width: Math.max(0, node.clientWidth - 28), height: Math.max(0, node.clientHeight - 28) });
+    const refresh = () => {
+      const width = Math.max(0, node.clientWidth - 28), height = Math.max(0, node.clientHeight - 28);
+      setAvailable(old => old.width === width && old.height === height && old.overview === overviewMode
+        ? old : {width, height, overview: overviewMode});
+    };
     const observer = new ResizeObserver(refresh);
     observer.observe(node);
     refresh();
     return () => observer.disconnect();
-  }, []);
+  }, [overviewMode]);
   async function action(name: string, args: Record<string, unknown> = {}) {
     try {
       await call(name, args);
@@ -885,7 +898,6 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
       setError(String(e));
     }
   }
-  const panel = session?.overview?.find(p => p.label === panelLabel);
   const participating = !!panel || panelLabel === "switcher" && !session?.overview?.length;
   const localWindows = participating ? session?.windows.filter(w => !panel || panel.slots.includes(w.id)) ?? [] : [];
   const spatialWindows = panel ? (session?.spatialIds ?? []).flatMap(id => {
@@ -906,7 +918,20 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
   // Selection and search update the session frequently; collision avoidance
   // depends only on the full inventory and its geometry.
   const overviewKey=panel ? JSON.stringify([panel,localWindows.map(w=>[w.id,w.bounds,w.desktopId,w.hidden,w.minimized]),session?.spatialIds,session?.desktops]) : null;
-  const overviewLayout=useMemo(()=>panel ? desktopOverviewTiles(panel,localWindows,available.width,available.height,stacked,session?.spatialIds ?? [],session?.desktops) : undefined,[overviewKey,available,stacked]);
+  const overviewLayout=useMemo(()=>{
+    if (!panel) return undefined;
+    // Changing panel mode changes the header/canvas. Measure that DOM first;
+    // packing the previous canvas would immediately require a second layout.
+    if (!available.overview || !available.width || !available.height) return {columns:0,tiles:[]};
+    const start=performance.now();
+    const layout=desktopOverviewTiles(panel,localWindows,available.width,available.height,stacked,session?.spatialIds ?? [],session?.desktops);
+    timing("layout",session?.sessionId ?? 0,performance.now()-start,layout.tiles.length);
+    return layout;
+  },[overviewKey,available,stacked]);
+  useEffect(()=>{
+    if (session?.mode === "inactive" || !overviewLayout?.tiles.length) return;
+    return afterFrame(()=>timing("overview_frame",session?.sessionId ?? 0,0,overviewLayout.tiles.length));
+  },[session?.sessionId,session?.mode,overviewLayout]);
   const tiles: {columns:number; tiles:(Tile | undefined)[]; regions?:DesktopAnchor[]} = useMemo(() => panel ? (() => {
     const all=overviewLayout!;
     return {...all,tiles:visible.map(w=>all.tiles[localWindows.findIndex(a=>a.id===w.id)])};

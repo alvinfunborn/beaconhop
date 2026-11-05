@@ -21,7 +21,7 @@ struct Runtime {
     sender: mpsc::Sender<Action>,
     config_path: PathBuf,
     previews: Mutex<HashMap<String, (Instant, String)>>,
-    capture: Mutex<()>,
+    capture: crate::capture_gate::CaptureGate,
     inventory: Mutex<()>,
     config_warning: Mutex<Option<String>>,
 }
@@ -84,7 +84,21 @@ pub fn key(event: KeyEvent) -> bool {
         RECORDED_KEYS.lock().unwrap().push(event.code);
         return true;
     }
-    let response = rt.engine.lock().unwrap().handle(event);
+    let started = crate::performance::performance_enabled().then(Instant::now);
+    let mut e = rt.engine.lock().unwrap();
+    let previous = e.session.session_id;
+    let response = e.handle(event);
+    let session_id = e.session.session_id;
+    drop(e);
+    if session_id != previous {
+        if let Some(started) = started {
+            crate::performance::record(
+                "shortcut",
+                session_id,
+                serde_json::json!({"elapsedMs":started.elapsed().as_secs_f64()*1000.}),
+            );
+        }
+    }
     for action in response.actions {
         let _ = rt.sender.send(action);
     }
@@ -118,7 +132,7 @@ pub fn init(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         sender,
         config_path: path,
         previews: Mutex::new(HashMap::new()),
-        capture: Mutex::new(()),
+        capture: crate::capture_gate::CaptureGate::default(),
         inventory: Mutex::new(()),
         config_warning: Mutex::new(config_error.clone()),
     });
@@ -216,6 +230,7 @@ pub fn init(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .spawn(move || {
             let mut warmed = false;
             let mut previous = None;
+            let mut attempted = HashMap::<String, (Instant, u8)>::new();
             loop {
                 std::thread::sleep(Duration::from_millis(1000));
                 let (enabled, active, focused, windows) = {
@@ -235,17 +250,31 @@ pub fn init(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                 if active {
                     continue;
                 }
-                let targets: Vec<_> = if !warmed {
-                    windows.into_iter().take(80).collect()
-                } else if focused != previous {
+                attempted.retain(|id, _| windows.iter().any(|w| &w.id == id));
+                // Fill startup misses and newly opened windows while idle. Stop
+                // retrying persistently uncapturable windows after three tries.
+                let targets: Vec<_> = {
+                    let cache = rt().previews.lock().unwrap();
                     windows
                         .into_iter()
-                        .filter(|w| Some(&w.id) == focused.as_ref())
+                        .filter(|w| {
+                            !warmed
+                                || focused != previous && Some(&w.id) == focused.as_ref()
+                                || !cache.contains_key(&w.id)
+                                    && attempted.get(&w.id).is_none_or(|(t, n)| {
+                                        *n < 3 && t.elapsed() >= Duration::from_secs(5)
+                                    })
+                        })
+                        .take(if warmed { 8 } else { 80 })
                         .collect()
-                } else {
-                    vec![]
                 };
                 if !targets.is_empty() {
+                    for target in &targets {
+                        let attempt = attempted
+                            .entry(target.id.clone())
+                            .or_insert((Instant::now(), 0));
+                        *attempt = (Instant::now(), attempt.1.saturating_add(1));
+                    }
                     capture_previews(&targets);
                     warmed = true;
                 }
@@ -362,14 +391,24 @@ fn hide() {
 }
 fn perform(action: Action) {
     match action {
-        Action::PrepareDisplays(displays) => crate::overview_windows::warm(&rt().app, &displays),
+        Action::PrepareDisplays(displays) => {
+            let anchor = rt().engine.lock().unwrap().snapshot.current_display.clone();
+            crate::overview_windows::warm(&rt().app, &displays, &anchor);
+        }
         Action::Record(shortcut) => {
             let _ = rt().app.emit("shortcut-recorded", shortcut);
         }
         Action::Publish => publish(),
         Action::Show => {
+            let started = Instant::now();
             let search = rt().engine.lock().unwrap().session.mode == Mode::Search;
             show(search);
+            let session_id = rt().engine.lock().unwrap().session.session_id;
+            crate::performance::record(
+                "show_requested",
+                session_id,
+                serde_json::json!({"elapsedMs":started.elapsed().as_secs_f64()*1000.}),
+            );
         }
         Action::Search => show(true),
         Action::LoadTabs(session_id, origin) => {
@@ -838,7 +877,6 @@ fn cached_previews(windows: &[Destination]) -> HashMap<String, String> {
         .collect()
 }
 fn capture_previews(windows: &[Destination]) -> HashMap<String, String> {
-    let _capture = rt().capture.lock().unwrap();
     if !platform::permissions().screen_recording {
         rt().previews.lock().unwrap().clear();
         return HashMap::new();
@@ -855,9 +893,29 @@ fn capture_previews(windows: &[Destination]) -> HashMap<String, String> {
             .cloned()
             .collect()
     };
+    let ids: Vec<_> = stale.iter().map(|w| w.id.clone()).collect();
+    let lease = rt().capture.claim(ids.iter().cloned());
+    // An owner can finish between the first cache check and our claim.
+    let stale: Vec<_> = {
+        let cache = rt().previews.lock().unwrap();
+        stale
+            .into_iter()
+            .filter(|w| {
+                lease.ids.contains(&w.id)
+                    && cache
+                        .get(&w.id)
+                        .is_none_or(|(t, _)| t.elapsed() >= Duration::from_secs(3))
+            })
+            .collect()
+    };
     if !stale.is_empty() {
         let started = Instant::now();
         let images = platform::thumbnails(&stale);
+        crate::performance::record(
+            "capture",
+            0,
+            serde_json::json!({"elapsedMs":started.elapsed().as_secs_f64()*1000.,"count":images.len(),"requested":stale.len()}),
+        );
         let captured = images.len();
         let live: Vec<_> = rt()
             .engine
@@ -889,6 +947,14 @@ fn capture_previews(windows: &[Destination]) -> HashMap<String, String> {
             started.elapsed().as_millis()
         );
     }
+    drop(lease);
+    let waiting = Instant::now();
+    rt().capture.wait(&ids, Duration::from_millis(4500));
+    crate::performance::record(
+        "capture_wait",
+        0,
+        serde_json::json!({"elapsedMs":waiting.elapsed().as_secs_f64()*1000.,"count":windows.len()}),
+    );
     cached_previews(windows)
 }
 #[tauri::command]

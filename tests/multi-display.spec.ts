@@ -523,7 +523,8 @@ test('selection pops once, settles during rapid cross-display cycling and respec
   await page.clock.runFor(200);await select('1');
   expect((await pops()).length).toBe(after.length+1);
   await page.clock.runFor(200);
-  expect(await page.locator('#window-1 .window-hint').evaluate(n=>n.getAnimations().length)).toBe(0);
+  // WAAPI's document timeline is independent of the mocked JavaScript clock.
+  await expect.poll(()=>page.locator('#window-1 .window-hint').evaluate(n=>n.getAnimations().length)).toBe(0);
   await page.emulateMedia({reducedMotion:'reduce'});await select('2');
   expect((await pops()).length).toBe(after.length+1);
 });

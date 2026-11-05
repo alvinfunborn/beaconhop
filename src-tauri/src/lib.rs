@@ -1,3 +1,4 @@
+mod capture_gate;
 mod codex_plugin;
 mod config;
 mod engine;
@@ -12,6 +13,7 @@ mod navigation;
 mod overview;
 mod overview_windows;
 mod panel;
+mod performance;
 mod platform;
 mod plugin_install;
 mod plugin_manager;
@@ -146,7 +148,9 @@ pub fn run() {
             runtime::get_tab_thumbnails,
             runtime::get_permissions,
             runtime::request_permission,
-            runtime::get_diagnostics
+            runtime::get_diagnostics,
+            performance::performance_enabled,
+            performance::record_performance
         ])
         .setup(|app| {
             #[cfg(not(debug_assertions))]

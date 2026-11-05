@@ -353,8 +353,10 @@ private extension CGRect { var area: Double { isNull ? 0 : width * height } }
     }
     return strdup("macOS did not focus the requested window. Check Accessibility and desktop switching permissions.")
 }
-// One shareable-content query per batch, with at most four screenshot requests in flight.
+// One shareable-content query per batch. Share the concurrency bound across
+// displays so an independent display need not wait for another batch to finish.
 // Called off the event tap and main thread; timed-out callbacks own their state safely.
+private let screenshotSlots = DispatchSemaphore(value:8)
 @_cdecl("bh_thumbnails") public func bhThumbnails(_ raw: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
     guard CGPreflightScreenCaptureAccess(), let raw,
           let input = String(cString:raw).data(using:.utf8),
@@ -368,12 +370,12 @@ private extension CGRect { var area: Double { isNull ? 0 : width * height } }
     contentLock.lock(); let content = shared; contentLock.unlock()
     guard let content else {return nil}
     let wanted = Set(ids), windows = content.windows.filter{wanted.contains($0.windowID)}
-    let group = DispatchGroup(), slots = DispatchSemaphore(value:4), lock = NSLock()
+    let group = DispatchGroup(), lock = NSLock()
     var images = [String:String]()
     for window in windows {
         group.enter()
         DispatchQueue.global(qos:.userInitiated).async {
-            guard slots.wait(timeout:.now()+2) == .success else {group.leave();return}
+            guard screenshotSlots.wait(timeout:.now()+2) == .success else {group.leave();return}
             let config = SCStreamConfiguration()
             let factor = min(1,512 / max(1,max(window.frame.width,window.frame.height)))
             config.width = max(1,Int(window.frame.width * factor)); config.height = max(1,Int(window.frame.height * factor))
@@ -382,7 +384,7 @@ private extension CGRect { var area: Double { isNull ? 0 : width * height } }
                 if let image, let data = NSBitmapImageRep(cgImage:image).representation(using:.jpeg,properties:[.compressionFactor:0.78]) {
                     lock.lock(); images[String(window.windowID)] = "data:image/jpeg;base64," + data.base64EncodedString(); lock.unlock()
                 }
-                slots.signal(); group.leave()
+                screenshotSlots.signal(); group.leave()
             }
         }
     }

@@ -2,6 +2,43 @@
 
 Updated: 2026-11-05. Source implementation, packaged builds and native acceptance are separate. Dated entries describe their respective build, not necessarily the current executable.
 
+## 2026-11-05 overview latency
+
+Added opt-in JSONL timings through `BEACONHOP_PERFORMANCE_FILE`: shortcut,
+native show request, layout, cache decode, capture/wait, fresh decode and frame
+opportunities. Records contain counts and panel/session IDs, without window
+titles or image data. Double requestAnimationFrame is a paint opportunity,
+not proof of pixels reaching the display; frontend event timestamps are recorded
+when their IPC reaches native code.
+
+An instrumented build of the accepted hint-sign implementation was measured
+on this Mac with two displays and 23 windows (13 built-in, 10 external). Its
+first overview ran layout twice per screen, reached a frame opportunity at
+1.49 seconds on the slower display, and completed fresh previews at 4.73 seconds.
+The second capture batch waited behind a global lock. Subsequent invocations
+reached frame opportunities at 0.24–0.55 seconds. Startup caching also left holes
+that were only filled when opening the overview.
+
+The candidate measures the overview canvas before packing, prepares hidden
+panels at their display sizes, publishes decoded cache before starting a fresh
+capture, permits disjoint display captures concurrently, and shares overlapping
+capture requests. A global limit of eight native screenshot requests bounds
+concurrency. Idle warmup fills missing/new previews with bounded retries.
+Packing rules, preview resolution and accepted visual styling are unchanged.
+
+Validation: all 79 Playwright tests and 118 Rust tests passed (2 existing native
+tests ignored). The new checks cover one production layout on overview entry,
+stable geometry on selection, decoded cache before fresh capture, cancellation
+before deferred capture, and independent/overlapping capture ownership.
+TypeScript/Vite, version consistency, formatting and macOS debug bundle passed.
+The candidate was installed with the same signing requirement and byte-identical
+BH/SB settings; the existing browser host and ScreenBuoy processes stayed alive.
+The Mac locked before the candidate's native probe, returning an empty inventory;
+that probe is explicitly invalid and excluded. **Native performance improvement
+and final two-display keyboard/visual acceptance remain pending an unlocked
+session.** Evidence and install receipts are in ignored
+`logs/performance-20261105/` in the isolated `beaconhop-perf` worktree.
+
 
 ## 2026-11-05 selected hint location sign
 
