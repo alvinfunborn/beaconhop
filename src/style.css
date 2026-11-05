@@ -1077,6 +1077,30 @@ textarea {
 .selection-badge { color: var(--panel); background: var(--accent); border: 1px solid var(--accent); }
 .window-card.selected .selected-arrow { color: var(--panel); background: var(--accent); border-radius: 4px; padding: 2px; }
 
+/* Central markers carry window state where the eye already reads the hint. */
+.spatial-card .window-focus-marker { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); z-index:2; }
+.spatial-card:is(.selected,.departure) :is(.window-hint,.window-focus-marker) {
+  --marker-fill:#00695c;
+  --marker-ring:#78ffe2;
+  color:#fff; background:var(--marker-fill); border:2px solid var(--marker-ring);
+  display:inline-grid; place-items:center; padding:.22em; min-width:1.7em; min-height:1.7em;
+  border-radius:999px; font-weight:850;
+  font-size:min(calc(var(--hint-font-size) * 1.2),var(--hint-size));
+  box-shadow:0 0 0 3px #10151fe6,0 0 0 5px var(--marker-ring),0 5px 18px #000b;
+}
+.spatial-card.selected :is(.window-hint,.window-focus-marker) {
+  --marker-fill:#7538ef;
+  --marker-ring:#fff;
+  border-radius:8px;
+}
+.spatial-card.selected.departure :is(.window-hint,.window-focus-marker) { --marker-ring:#78ffe2; }
+.spatial-card :is(.window-hint,.window-focus-marker)[data-state-label]::after {
+  content:attr(data-state-label); position:absolute; top:calc(100% + 9px); left:50%; transform:translateX(-50%);
+  padding:3px 7px; border-radius:5px; border:1px solid var(--marker-ring);
+  background:var(--marker-fill); color:#fff; font:750 10px/1.2 system-ui,sans-serif; white-space:nowrap;
+  box-shadow:0 3px 10px #0009;
+}
+
 .desktop-wash {
   position: absolute;
   pointer-events: none;

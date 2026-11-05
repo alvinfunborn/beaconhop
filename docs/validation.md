@@ -2,6 +2,32 @@
 
 Updated: 2026-11-05. Source implementation, packaged builds and native acceptance are separate. Dated entries describe their respective build, not necessarily the current executable.
 
+## 2026-11-05 central state hints and tighter packing
+
+Spatial overview state is now visible at the center of the preview: selected
+hints are purple squares with a Selected label, origin hints are teal circles
+with an Origin label, and combined state uses purple with a teal ring and both
+labels. Chinese labels follow the app language. Search and windows without a
+shortcut keep a central state marker. Ordinary hint customization is unchanged.
+
+Packing also tries tight free rectangles and corner placement, selecting these
+only when they permit a larger common preview scale. An anonymized 12-window
+native-size fixture increased canvas coverage from about 69% to 76%, without
+changing native size ratios or reserving fixed desktop columns.
+
+Validation: all 72 UI tests passed, including the new state/combined/search and
+mixed-size packing regressions. The debug app/DMG built and the app was installed
+with the same signing requirement and byte-identical BH/SB settings. Native AX
+readback found 25 thumbnails across two monitors, including both recovered
+inactive-desktop windows; all targets passed a complete forward/reverse Tab
+cycle (50 steps). Eight actual VS Code previews retained common native width
+and height scales within each display (integer AX rounding spread below 0.003).
+An inspected installed-app screenshot confirms the centered Chinese state
+markers. Tests cancelled back to inactive; the existing browser host and
+ScreenBuoy processes remained running. Evidence, screenshots and installation
+backup: ignored `logs/compact-state-20261105/`. Windows runtime appearance was
+not tested.
+
 ## 2026-11-05 proportional native thumbnail sizes
 
 The shared desktop overview now applies one common preview scale per physical

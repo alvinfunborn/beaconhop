@@ -447,3 +447,47 @@ test('Tab follows final thumbnail rows and Shift+Tab reverses while the origin s
   expect(badges!.y+badges!.height).toBeLessThan(card!.y+card!.height);
   await page.screenshot({path:'logs/tab-order-20261104/selected-origin.png'});
 });
+
+test('central hints distinguish origin, selection and combined state and remain visible in search',async({page})=>{
+  await fixture(page);await page.setViewportSize({width:1376,height:900});await page.goto(left);
+  const origin=page.locator('#window-0 .window-hint'),selected=page.locator('#window-1 .window-hint');
+  await expect(origin).toHaveAttribute('data-state-label','Origin');
+  await expect(selected).toHaveAttribute('data-state-label','Selected');
+  await expect(origin).toHaveCSS('border-radius','999px');
+  await expect(selected).toHaveCSS('border-radius','8px');
+  await expect(origin).toHaveCSS('background-color','rgb(0, 105, 92)');
+  await expect(selected).toHaveCSS('background-color','rgb(117, 56, 239)');
+  for(const marker of [origin,selected]){
+    const b=(await marker.boundingBox())!,p=(await marker.locator('..').boundingBox())!;
+    expect(b.x+b.width/2).toBeCloseTo(p.x+p.width/2,0);
+    expect(b.y+b.height/2).toBeCloseTo(p.y+p.height/2,0);
+  }
+  await page.screenshot({path:'logs/compact-state-20261105/hint-states.png'});
+  await api(page,'navigate',{delta:-1});
+  await expect(origin).toHaveAttribute('data-state-label','Origin · Selected');
+  await expect(origin).toHaveCSS('background-color','rgb(117, 56, 239)');
+  await expect(origin).toHaveCSS('border-color','rgb(120, 255, 226)');
+  await api(page,'open_search');
+  await expect(page.locator('.window-hint')).toHaveCount(0);
+  await expect(page.locator('#window-0 .window-focus-marker')).toHaveText('↵');
+  await expect(page.locator('#window-0 .window-focus-marker')).toHaveAttribute('data-state-label','Origin · Selected');
+});
+
+test('mixed native rectangles fill holes rather than fragment the canvas',async({page})=>{
+  await fixture(page);await page.setViewportSize({width:1736,height:1073});await page.goto(left);
+  await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{
+    const scene=[[22,39,1677,985],[828,352,800,685],[204,252,1010,717],[283,288,740,625],
+      [0,118,1677,985],[277,209,1270,720],[470,96,960,946],[305,262,921,726],
+      [213,192,1587,898],[232,39,1372,978],[501,221,890,566],[153,155,1587,898]];
+    const template=s.windows[0];s.desktops=[{id:'one',name:'Desktop 1',displayId:'1',current:true}];
+    s.windows=scene.map(([x,y,width,height],i)=>({...template,id:String(i),displayId:'1',desktopId:'one',
+      hidden:false,minimized:false,currentDesktop:true,bounds:{x,y,width,height}}));
+    s.resultIds=s.windows.map((w:any)=>w.id);s.overview[0].slots=s.resultIds;s.overview[1].slots=[];
+    s.overview[0].display.bounds={x:0,y:0,width:1800,height:1169};s.spatialIds=s.resultIds;
+  }));
+  await assertFits(page,12);
+  const boxes=await page.getByRole('option').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return {w:r.width,h:r.height};}));
+  const canvas=(await page.locator('.window-list').boundingBox())!;
+  expect(boxes.reduce((sum,r)=>sum+r.w*r.h,0)/((canvas.width-28)*(canvas.height-28))).toBeGreaterThan(.73);
+  await page.screenshot({path:'logs/compact-state-20261105/compact-mixed.png'});
+});

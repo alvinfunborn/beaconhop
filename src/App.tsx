@@ -1398,7 +1398,12 @@ function WindowCard({
             <small>{w.content ? (zh ? "暂无预览" : "No preview") : appName}</small>
           </div>
         )}
-        {!search && w.hint && <kbd className="window-hint hint-badge" style={hintVariables(hintStyle)}>{w.hint.replaceAll(" ", "␣")}</kbd>}
+        {!search && w.hint && <kbd className="window-hint hint-badge" style={hintVariables(hintStyle)}
+          data-state-label={depth === undefined ? undefined : selected && departure ? (zh ? "出发 · 选中" : "Origin · Selected") : selected ? (zh ? "选中" : "Selected") : departure ? (zh ? "出发" : "Origin") : undefined}
+        >{w.hint.replaceAll(" ", "␣")}</kbd>}
+        {depth !== undefined && (search || !w.hint) && (selected || departure) && <span className="window-focus-marker hint-badge" style={hintVariables(hintStyle)}
+          data-state-label={selected && departure ? (zh ? "出发 · 选中" : "Origin · Selected") : selected ? (zh ? "选中" : "Selected") : (zh ? "出发" : "Origin")}
+          aria-hidden="true">{selected ? "↵" : "●"}</span>}
         {w.minimized && (
           <span className="window-state">{zh ? "最小化" : "Minimized"}</span>
         )}

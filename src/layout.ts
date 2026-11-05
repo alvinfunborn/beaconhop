@@ -97,7 +97,13 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
         const distance=((cx-a.x)/width)**2+((cy-a.y)/height)**2;
         const footprint=extent ? (Math.max(extent.right,c.x+w)-Math.min(extent.left,c.x))
           *(Math.max(extent.bottom,c.y+h)-Math.min(extent.top,c.y))/(width*height) : 0;
-        const cost=strategy.startsWith('compact') ? footprint+distance*.25 : distance;
+        // Prefer tight free rectangles and their corners, rather than leaving
+        // unusable strips around a card centered inside a large empty region.
+        const fit=strategy.startsWith('fit') ? Math.min(...free.filter(f=>c.x>=f.x-.1 && c.y>=f.y-.1
+          && c.x+w<=f.x+f.width+.1 && c.y+h<=f.y+f.height+.1).map(f=>
+            (f.width*f.height-w*h)/(width*height)
+            +(Math.min(c.x-f.x,f.x+f.width-c.x-w)+Math.min(c.y-f.y,f.y+f.height-c.y-h))/Math.max(width,height))) : 0;
+        const cost=strategy.startsWith('fit') ? fit+distance*.02 : strategy.startsWith('compact') ? footprint+distance*.25 : distance;
         if(cost<score){best=c;score=cost;}
       }
       if(!best)return null;
@@ -121,7 +127,7 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
     return placed.sort((a,b)=>a.index-b.index).map(n=>tile(n.x,n.y,n.width,n.height,guides.length ? caption : undefined));
   }
   let best:Tile[]=[],largest=0;
-  const strategies=guides.length ? ['area','x','y','small','compact','compact-small'] : ['area'];
+  const strategies=guides.length ? ['area','x','y','small','compact','compact-small','fit','fit-small'] : ['area'];
   for(const strategy of strategies){
     order=anchors.map((_,i)=>i).sort((a,b)=>(guides[a]?.rank ?? 0)-(guides[b]?.rank ?? 0)
       || (strategy==='x' ? anchors[a].x-anchors[b].x : strategy==='y' ? anchors[a].y-anchors[b].y
