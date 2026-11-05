@@ -1081,20 +1081,27 @@ textarea {
 /* Central markers carry window state where the eye already reads the hint. */
 .spatial-card .window-focus-marker { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); z-index:2; }
 .spatial-card:is(.selected,.departure) :is(.window-hint,.window-focus-marker) {
-  --marker-fill:#00695c;
-  --marker-ring:#78ffe2;
-  color:#fff; background:var(--marker-fill); border:2px solid var(--marker-ring);
+  color:#fff; background:#00695c; border:2px solid #78ffe2;
   display:inline-grid; place-items:center; padding:.22em; min-width:1.7em; min-height:1.7em;
   border-radius:999px; font-weight:850;
-  font-size:min(calc(var(--hint-font-size) * 1.2),var(--hint-size));
-  box-shadow:0 0 0 3px #10151fe6,0 0 0 5px var(--marker-ring),0 5px 18px #000b;
+  font-size:min(var(--hint-font-size),var(--state-hint-size));
+  box-shadow:0 0 0 3px #10151fe6,0 4px 12px #0009;
 }
 .spatial-card.selected :is(.window-hint,.window-focus-marker) {
-  --marker-fill:#7538ef;
-  --marker-ring:#fff;
+  color:#11151c; background:#fffef5; border-color:#11151c;
+  font-size:min(calc(var(--hint-font-size) * 1.5),var(--state-hint-size));
   border-radius:8px;
+  box-shadow:0 0 0 3px #fffef580,0 6px 18px #000c;
 }
-.spatial-card.selected.departure :is(.window-hint,.window-focus-marker) { --marker-ring:#78ffe2; }
+.spatial-card.selected :is(.window-hint,.window-focus-marker)::after {
+  content:""; position:absolute; top:100%; left:50%; transform:translateX(-50%);
+  border-left:.18em solid transparent; border-right:.18em solid transparent;
+  border-top:.22em solid #fffef5; filter:drop-shadow(0 2px 0 #11151c);
+}
+.spatial-card.selected.departure :is(.window-hint,.window-focus-marker)::before {
+  content:""; position:absolute; top:-.12em; right:-.12em; width:.3em; height:.3em;
+  border-radius:50%; background:#78ffe2; border:2px solid #11151c;
+}
 
 .desktop-wash {
   position: absolute;

@@ -925,6 +925,24 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
   const images = usePreviews(localSession, participating && config.thumbnails && (!listLayout || !!panel) && (!!panel || contentLayer || !windowsNative));
   useEffect(()=>{ if ((panel || contentLayer) && session?.selected) document.getElementById("window-"+session.selected)?.scrollIntoView({block:"nearest"}); },[session?.selected,contentLayer,tiles]);
   useEffect(() => setInspected(null), [session?.sessionId, session?.selected]);
+  const lastSelection = useRef<{sessionId:number; at:number}>();
+  useLayoutEffect(() => {
+    if (!session?.selected) return;
+    const now = performance.now(), previous = lastSelection.current;
+    lastSelection.current = {sessionId:session.sessionId, at:now};
+    // Track all selections, including the other display, so rapid Tab repeats
+    // settle directly instead of starting a fresh pop on every card.
+    if (previous?.sessionId === session.sessionId && now - previous.at < 180) return;
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const marker = document.getElementById("window-" + session.selected)
+      ?.querySelector(".spatial-card :is(.window-hint,.window-focus-marker)");
+    const animation = marker?.animate([
+      {transform:"translate(-50%,-50%) scale(.86)", offset:0},
+      {transform:"translate(-50%,-50%) scale(1.04)", offset:.65},
+      {transform:"translate(-50%,-50%) scale(1)", offset:1},
+    ], {duration:150, easing:"ease-out"});
+    return () => animation?.cancel();
+  }, [session?.sessionId, session?.selected]);
   const layerName = session?.layer === "tabs" ? t("Tabs & sessions") : session?.layer === "desktops" ? t("Desktops") : session?.layer === "application" ? t("Application windows") : t("All windows");
   const layerHold = session?.layer === "tabs" ? config.tabsHoldShortcut : session?.layer === "application" ? config.applicationHoldShortcut : session?.layer === "desktops" ? config.desktopsHoldShortcut : config.holdShortcut;
   useEffect(() => {
@@ -1231,9 +1249,16 @@ function WindowCard({
                 height: r.height * scale,
               }
             : null;
-        const hint = element.current?.querySelector(".window-hint")?.getBoundingClientRect();
-        const hintBounds = hint ? { x: (hint.x - 3) * scale, y: (hint.y - 3) * scale,
-          width: (hint.width + 6) * scale, height: (hint.height + 6) * scale } : null;
+        const badge = element.current?.querySelector<HTMLElement>(".window-hint,.window-focus-marker");
+        const hint = badge?.getBoundingClientRect();
+        // DWM previews sit above the webview. Reserve the static sign's whole
+        // footprint, including its pointer, origin dot and maximum pop scale.
+        const sign = depth !== undefined && selected;
+        const extra = sign && badge ? parseFloat(getComputedStyle(badge).fontSize) * .22 + 4 : 3;
+        const width = badge ? badge.offsetWidth * (sign ? 1.04 : 1) + extra * 2 : 0;
+        const height = badge ? badge.offsetHeight * (sign ? 1.04 : 1) + extra * 2 : 0;
+        const hintBounds = hint ? { x: (hint.x + hint.width / 2 - width / 2) * scale,
+          y: (hint.y + hint.height / 2 - height / 2) * scale, width:width * scale, height:height * scale } : null;
         if (alive)
           call("set_live_preview", { id: w.id, sessionId, bounds, hintBounds }).catch(
             () => {},
@@ -1242,7 +1267,7 @@ function WindowCard({
     };
     const observer = new ResizeObserver(update);
     observer.observe(node);
-    const badge = element.current?.querySelector(".window-hint");
+    const badge = element.current?.querySelector(".window-hint,.window-focus-marker");
     if (badge) observer.observe(badge);
     window.addEventListener("scroll", update, true);
     window.addEventListener("resize", update);
@@ -1257,7 +1282,7 @@ function WindowCard({
         () => {},
       );
     };
-  }, [w.id, sessionId, thumbnails, search, tile?.x, tile?.y, tile?.width, tile?.height]);
+  }, [w.id, sessionId, thumbnails, search, selected, departure, depth, tile?.x, tile?.y, tile?.width, tile?.height]);
   return (
     <button
       ref={element}
@@ -1271,6 +1296,10 @@ function WindowCard({
         "--hint-size": `${Math.max(8, Math.min(
           (tile.preview - 2 * hintStyle.borderWidth - 12) / 1.55,
           (tile.width - 2 * hintStyle.borderWidth - 12) / (w.hint.length * .65 + .96),
+        ))}px`,
+        "--state-hint-size": `${Math.max(4, Math.min(
+          (tile.preview - 18) / (selected ? 2.3 : 1.8),
+          (tile.width - 18) / (Math.max(1.7, (search ? 1 : w.hint.length) * .65 + .44) + .08),
         ))}px`,
       } as CSSProperties : { visibility: "hidden" }}
       onClick={onSelect}

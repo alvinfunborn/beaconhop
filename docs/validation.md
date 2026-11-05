@@ -3,6 +3,34 @@
 Updated: 2026-11-05. Source implementation, packaged builds and native acceptance are separate. Dated entries describe their respective build, not necessarily the current executable.
 
 
+## 2026-11-05 selected hint location sign
+
+Selected spatial hints now use a light sign with dark text, a downward pointer
+and approximately 1.5 times the ordinary font size. Origin hints stay teal and
+ordinary-sized; combined state adds a small teal dot to the selected sign.
+Search retains the same state markers. The sign briefly pops for 150 ms on a
+selection change, skips the pop during rapid cycling across displays, and
+respects Reduce Motion. Small previews cap its size, including two-character
+hints. Card geometry, preview brightness and ordinary hint customization remain
+unchanged. Windows native preview cutouts include the pointer, dot, pop extent
+and search marker.
+
+Validation: all 76 Playwright tests passed, including state/combined/search
+appearance, stable geometry, dense two-character hints, animation completion,
+rapid cross-display changes, reduced motion and the simulated Windows preview
+cutout contract. TypeScript/Vite, version consistency and the macOS debug bundle
+build passed. The installed app retains the designated signing requirement and
+byte-identical BH/SB settings. Its two native panels displayed all 19 windows in
+the current inventory (10 external, 9 built-in), including both recovered
+inactive-desktop windows. A complete forward/reverse cycle passed 38 steps;
+an additional 12 rapid Tab/Shift+Tab events landed on the expected targets.
+Native preview size ratios and desktop order checks passed. Both screenshots
+were inspected, including the selected light sign and teal origin circle,
+and the overview was cancelled back to inactive. Existing browser host and
+ScreenBuoy processes stayed running. Evidence, signed-install receipt and
+backup: ignored `logs/focus-sign-20261105/`. Windows runtime appearance was not
+tested; the cutout check uses a browser fixture.
+
 ## 2026-11-05 compact spatial packing and shorter interface copy
 
 The overview compares edge, short-side and contact fits in its free-rectangle

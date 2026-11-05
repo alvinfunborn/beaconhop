@@ -1,15 +1,19 @@
 import {test, expect, type Page} from '@playwright/test';
 test.use({reducedMotion:'reduce'});
 
-async function fixture(page: Page) {
+async function fixture(page: Page, windowsPreview = false) {
+  if(windowsPreview)await page.addInitScript(()=>Object.defineProperty(navigator,'platform',{get:()=> 'Win32'}));
   await page.route('**/src/api.ts', async route => {
     const response = await route.fetch();
     const colors=['#315d83','#4f406d','#526a52','#69503b','#705267','#4b6566'];
     const images=colors.map((color,i) => 'data:image/svg+xml,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800"><rect width="1200" height="800" fill="${color}"/><rect x="0" y="0" width="1200" height="42" fill="#20242e"/><circle cx="20" cy="21" r="6" fill="#e8827b"/><circle cx="40" cy="21" r="6" fill="#dbc171"/><circle cx="60" cy="21" r="6" fill="#87bb92"/><rect x="16" y="60" width="210" height="720" rx="5" fill="#171f2c"/><rect x="246" y="60" width="930" height="80" rx="6" fill="#ffffff22"/><text x="275" y="111" font-family="sans-serif" font-size="30" fill="#fff">${['Product design','engine.rs — BeaconHop','Project reference','Terminal · development','Weekend notes','Design assets'][i]}</text><path d="M280 190h600M280 230h750M280 270h660M280 310h720M280 350h560" stroke="#ffffff77" stroke-width="12"/><rect x="280" y="410" width="400" height="250" rx="8" fill="#ffffff22"/><rect x="710" y="410" width="400" height="250" rx="8" fill="#ffffff11"/></svg>`));
-    await route.fulfill({response,body:(await response.text())+`
+    const source=await response.text();
+    await route.fulfill({response,body:(windowsPreview ? source.replace('export const native = isTauri();',
+      'const native = false; const windowsPreview = true; export {windowsPreview as native};') : source)+`
       const fixtureImages=${JSON.stringify(images)};
       const originalCall=call;
       call=async function(name,args={}) {
+        if(name==='set_live_preview') { (window.__livePreviews ??= {})[args.id]=args;return; }
         if(name.includes('thumbnail')) { window.__previewIds=args.ids;return Object.fromEntries(args.ids.map(id=>[id,fixtureImages[Number(id)%6]])); }
         return originalCall(name,args);
       };
@@ -462,21 +466,108 @@ test('central hints distinguish origin, selection and combined state and remain 
   await expect(origin).toHaveCSS('border-radius','999px');
   await expect(selected).toHaveCSS('border-radius','8px');
   await expect(origin).toHaveCSS('background-color','rgb(0, 105, 92)');
-  await expect(selected).toHaveCSS('background-color','rgb(117, 56, 239)');
+  await expect(selected).toHaveCSS('background-color','rgb(255, 254, 245)');
+  await expect(selected).toHaveCSS('color','rgb(17, 21, 28)');
+  await expect(origin).toHaveCSS('font-size','28px');
+  await expect(selected).toHaveCSS('font-size','42px');
+  const positions=await page.getByRole('option').evaluateAll(nodes=>nodes.map(n=>n.getBoundingClientRect().toJSON()));
   for(const marker of [origin,selected]){
     const b=(await marker.boundingBox())!,p=(await marker.locator('..').boundingBox())!;
     expect(b.x+b.width/2).toBeCloseTo(p.x+p.width/2,0);
     expect(b.y+b.height/2).toBeCloseTo(p.y+p.height/2,0);
   }
-  await page.screenshot({path:'logs/packing-cleanup-20261105/hint-states.png'});
+  expect(await selected.evaluate(n=>parseFloat(getComputedStyle(n,'::after').borderTopWidth))).toBeGreaterThan(8);
+  await page.screenshot({path:'logs/focus-sign-20261105/hint-states.png'});
   await api(page,'navigate',{delta:-1});
   await expect(origin).not.toHaveAttribute('data-state-label');
-  await expect(origin).toHaveCSS('background-color','rgb(117, 56, 239)');
-  await expect(origin).toHaveCSS('border-color','rgb(120, 255, 226)');
+  await expect(origin).toHaveCSS('background-color','rgb(255, 254, 245)');
+  await expect(origin).toHaveCSS('border-color','rgb(17, 21, 28)');
+  expect(await origin.evaluate(n=>getComputedStyle(n,'::before').backgroundColor)).toBe('rgb(120, 255, 226)');
+  expect(await page.getByRole('option').evaluateAll(nodes=>nodes.map(n=>n.getBoundingClientRect().toJSON()))).toEqual(positions);
+  await page.screenshot({path:'logs/focus-sign-20261105/combined-state.png'});
   await api(page,'open_search');
   await expect(page.locator('.window-hint')).toHaveCount(0);
   await expect(page.locator('#window-0 .window-focus-marker')).toHaveText('↵');
-  await expect(page.locator('#window-0 .window-focus-marker')).toHaveCSS('background-color','rgb(117, 56, 239)');
+  await expect(page.locator('#window-0 .window-focus-marker')).toHaveCSS('background-color','rgb(255, 254, 245)');
+  await page.screenshot({path:'logs/focus-sign-20261105/search-state.png'});
+});
+
+test('selection pops once, settles during rapid cross-display cycling and respects reduced motion',async({page})=>{
+  await fixture(page);await page.emulateMedia({reducedMotion:'no-preference'});
+  await page.addInitScript(()=>{
+    const animate=Element.prototype.animate;
+    (window as any).__markerPops=[];
+    Element.prototype.animate=function(frames,options){
+      if(this.matches('.window-hint,.window-focus-marker'))(window as any).__markerPops.push(this.closest('.window-card')!.id);
+      return animate.call(this,frames,options);
+    };
+  });
+  await page.clock.install();await page.goto(left);
+  await expect(page.locator('#window-1')).toHaveAttribute('aria-selected','true');
+  await page.clock.pauseAt(new Date(Date.now()+1000));
+  const pops=()=>page.evaluate(()=>(window as any).__markerPops);
+  const select=async(id:string)=>{
+    await page.evaluate(id=>(window as any).__changeOverview((s:any)=>{s.selected=id;}),id);
+    await expect(page.locator('#window-'+id)).toHaveAttribute('aria-selected','true');
+  };
+  await page.clock.runFor(200);await select('2');
+  const after=await pops();expect(after.at(-1)).toBe('window-2');
+  await page.evaluate(()=>(window as any).__changeOverview((s:any)=>{s.revision++;}));
+  expect(await pops()).toEqual(after); // Inventory publications do not replay the cue.
+  await page.clock.runFor(40);
+  await page.evaluate(()=>(window as any).__changeOverview((s:any)=>{s.selected='3';}));
+  await expect(page.getByRole('option',{selected:true})).toHaveCount(0);
+  await page.clock.runFor(40);await select('0');
+  expect(await pops()).toEqual(after);
+  expect(await page.locator('.window-hint').evaluateAll(nodes=>nodes.flatMap(n=>n.getAnimations()).length)).toBe(0);
+  await page.clock.runFor(200);await select('1');
+  expect((await pops()).length).toBe(after.length+1);
+  await page.clock.runFor(200);
+  expect(await page.locator('#window-1 .window-hint').evaluate(n=>n.getAnimations().length)).toBe(0);
+  await page.emulateMedia({reducedMotion:'reduce'});await select('2');
+  expect((await pops()).length).toBe(after.length+1);
+});
+
+test('large two-character state hints fit dense previews without changing their geometry',async({page})=>{
+  await fixture(page);await page.setViewportSize({width:800,height:600});await page.goto(left);
+  const config=await api(page,'get_settings') as any;
+  await api(page,'save_settings',{config:{...config,hintStyle:{...config.hintStyle,fontSize:64}}});
+  await page.evaluate(()=>(window as any).__changeOverview((s:any)=>{
+    const template=s.windows[0];
+    s.windows=Array.from({length:30},(_,i)=>({...template,id:String(i),hint:'AA',bounds:{x:i%6*180,y:Math.floor(i/6)*120,width:800,height:600}}));
+    s.resultIds=s.windows.map((w:any)=>w.id);s.spatialIds=s.resultIds;
+    s.overview[0].slots=s.resultIds;s.overview[1].slots=[];s.selected='0';
+  }));
+  await assertFits(page,30);
+  const positions=await page.getByRole('option').evaluateAll(nodes=>nodes.map(n=>n.getBoundingClientRect().toJSON()));
+  for(const id of ['0','1','29']){
+    await page.evaluate(id=>(window as any).__changeOverview((s:any)=>{s.selected=id;}),id);
+    await expect(page.locator('#window-'+id)).toHaveAttribute('aria-selected','true');
+    expect(await page.locator('#window-'+id+' .window-hint').evaluate(n=>{
+      const b=n.getBoundingClientRect(),p=n.parentElement!.getBoundingClientRect(),font=parseFloat(getComputedStyle(n).fontSize);
+      return b.left-4>=p.left && b.right+4<=p.right && b.top-4>=p.top && b.bottom+font*.22+4<=p.bottom;
+    })).toBe(true);
+  }
+  expect(await page.getByRole('option').evaluateAll(nodes=>nodes.map(n=>n.getBoundingClientRect().toJSON()))).toEqual(positions);
+  await page.screenshot({path:'logs/focus-sign-20261105/dense-hints.png'});
+});
+
+test('native preview cutouts include the enlarged sign and search marker',async({page})=>{
+  await fixture(page,true);await page.goto(left);
+  await expect(page.locator('.native-preview-area')).toHaveCount(3);
+  async function check(id:string,marker:string){
+    await expect.poll(()=>page.evaluate(({id,marker})=>{
+      const sent=(window as any).__livePreviews?.[id],badge=document.querySelector('#window-'+id+' '+marker);
+      if(!sent?.hintBounds||!badge)return false;
+      const h=sent.hintBounds,b=badge.getBoundingClientRect(),f=parseFloat(getComputedStyle(badge).fontSize),s=devicePixelRatio;
+      return h.x/s<=b.left-3 && (h.x+h.width)/s>=b.right+3 && h.y/s<=b.top-3 && (h.y+h.height)/s>=b.bottom+f*.22+3;
+    },{id,marker})).toBe(true);
+  }
+  await check('1','.window-hint');
+  await api(page,'navigate',{delta:-1});await check('0','.window-hint');
+  await api(page,'open_search');
+  await expect(page.locator('.window-hint')).toHaveCount(0);
+  await check('0','.window-focus-marker');
 });
 
 test('mixed native rectangles fill holes rather than fragment the canvas',async({page})=>{
