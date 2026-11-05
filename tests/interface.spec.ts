@@ -281,7 +281,8 @@ call = async function(name, args = {}) {
   });
   await page.goto("/?preview=1&view=switcher");
   await expect(page.locator(".window-preview")).toHaveCount(6);
-  expect(await page.evaluate(() => (window as any).__batchCount)).toBe(1);
+  // Fresh capture starts after the cached batch has had a frame to render.
+  await expect.poll(() => page.evaluate(() => (window as any).__batchCount)).toBe(1);
   await page.evaluate(async () => {
     const api = await import("/src/api.ts" as string);
     await api.call("open_search");
