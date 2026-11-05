@@ -2,6 +2,47 @@
 
 Updated: 2026-11-05. Source implementation, packaged builds and native acceptance are separate. Dated entries describe their respective build, not necessarily the current executable.
 
+
+## 2026-11-05 compact spatial packing and shorter interface copy
+
+The overview compares edge, short-side and contact fits in its free-rectangle
+packer, then compacts both axes before selecting the largest common preview
+scale. Multi-desktop flow candidates preserve the left-to-right order of group
+centers while individual cards fill neighbouring gaps. This removes the hard
+quadrant constraints that left a large central hole. Native width/height ratios,
+full inventory geometry during search, and visual Tab order remain intact.
+The approach draws on [MaxRects](https://github.com/juj/RectangleBinPack);
+no new runtime dependency is required.
+
+With identical anonymized native bounds, the 14-window X-shaped fixture's
+coverage rose from 79.1% to 84.3% on a 1708×850 canvas. The 10-window/four-desktop
+fixture rose from 57.8% to 79.5% on a 2468×1150 canvas. These are fixture canvas
+measurements, not whole-panel coverage or a guarantee for arbitrary inventories.
+
+Removed repeated state labels, depth badges and layout explanations, shortened
+the overview header and settings/plugin/integration descriptions, and retained
+recovery instructions where needed. Selected/origin hints still use their
+purple-square/teal-circle shapes, including search. Desktop names appear once
+per group in a card caption, clear of native preview surfaces; empty groups keep
+an anchor. Fixed Chinese copy is centralized in `src/locales/zh.json` with English
+source keys and dynamic-message fallbacks. This supersedes the visible state
+labels described in the previous entry.
+
+Validation: all 73 UI tests and the TypeScript/Vite/macOS debug bundle build
+passed. The final installed app retained its designated signing requirement and
+byte-identical BH/SB settings. Native AX readback found all 24 thumbnails across
+two monitors, including both recovered inactive-desktop windows. Eight VS Code
+previews preserved common scales within each display (rounding spread below
+0.003); all targets passed 48 forward/reverse Tab steps. Whole-panel thumbnail
+coverage was 70.7% on the external monitor and 71.9% on the built-in display.
+The final screenshots were inspected and the session cancelled to inactive.
+The existing browser host and ScreenBuoy processes remained running. Final
+build, tests, screenshots, receipt and backup: ignored
+`logs/packing-delivery-20261105/`; algorithm comparisons:
+`logs/packing-cleanup-20261105/`. An intermediate post-install key check did not
+remain held and is retained separately; the final package passed the complete
+check. Windows runtime appearance was not tested.
+
 ## 2026-11-05 central state hints and tighter packing
 
 Spatial overview state is now visible at the center of the preview: selected

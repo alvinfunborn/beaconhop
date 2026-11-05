@@ -456,7 +456,7 @@ test("one character set supports punctuation and spaces with no length or positi
   await page.getByRole("button", {name:"Shortcuts",exact:true}).click();
   await page.getByLabel("Hint characters", {exact:true}).fill("as12;? ");
   await expect(page.getByLabel("Hint characters", {exact:true})).toHaveValue("AS12;? ");
-  await expect(page.getByText("Single-character hints first; automatically use two characters when needed. Never more than two.", {exact:true})).toBeVisible();
+  await expect(page.getByText("At least 2 unique characters, in priority order. Hints use 1–2 keys; ␣ = Space. Symbols follow English key positions.", {exact:true})).toBeVisible();
   await expect(page.locator(".hint-preview")).toHaveCount(0);
   await expect(page.getByLabel("Hint length", {exact:true})).toHaveCount(0);
   await expect(page.getByLabel(/Position \d/)).toHaveCount(0);
@@ -519,18 +519,18 @@ test("two-character hint capacity never hides overflow windows and spaces have a
   await page.goto("/?preview=1&view=switcher");
   await expect(page.getByRole("option")).toHaveCount(6);
   await expect(page.locator(".window-hint").first()).toHaveText("A␣");
-  await expect(page.locator(".switcher-warning")).toContainText("Hint combinations are exhausted");
+  await expect(page.locator(".switcher-warning")).toContainText("No hint? Use arrows, search or click.");
   await expect(page.locator(".window-hint")).toHaveCount(5);
 });
 
 test("reverse-cycle and Escape help follows a customized hold shortcut",async({page})=>{
   await page.goto("/?preview=1");
-  await expect(page.getByText(/Shift \+ Tab.*cycles backward/)).toBeVisible();
+  await expect(page.getByText("Release to switch. Shift reverses; Esc cancels.")).toBeVisible();
   await page.getByRole("button",{name:"Enter Hold shortcut manually",exact:true}).click();
   await page.getByRole("textbox",{name:"Hold shortcut text",exact:true}).fill("Ctrl+Space");
   await page.getByRole("button",{name:"Apply",exact:true}).click();
-  await expect(page.getByText(/Ctrl \+ Space cycles forward; Ctrl \+ Shift \+ Space cycles backward/)).toBeVisible();
-  await expect(page.getByText(/Esc cancels and returns to the original window/).first()).toBeVisible();
+  await expect(page.getByRole("button",{name:"Hold shortcut",exact:true})).toBeVisible();
+  await expect(page.getByText("Release to switch. Shift reverses; Esc cancels.")).toBeVisible();
   await page.getByRole("button",{name:"Save changes",exact:true}).click();
   await page.route("**/src/api.ts",async route=>{
     const response=await route.fetch();

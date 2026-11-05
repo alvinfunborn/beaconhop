@@ -5,7 +5,7 @@ type SpatialGuide = {x:number;y:number;group:string;rank:number;home:Area;origin
 
 export type Tile = { x: number; y: number; width: number; height: number; preview: number; meta: number; origin?: {x:number;y:number;width:number;height:number} };
 
-// Preserve native centers and relative size, then separate only overlapping cards.
+// Use native centers as spatial cues and keep relative size while packing cards.
 // Layout uses the complete inventory: selection and filtering never repack it.
 export function overviewTiles(panel: OverviewPanel, windows: Destination[], width: number, height: number, stacked = false, spatialIds: string[] = [], guides: SpatialGuide[] = []) {
   if (!windows.length || width <= 0 || height <= 0) return {columns: 1, tiles: [] as Tile[]};
@@ -38,7 +38,7 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
       const a=anchors[index],w=a.width*shrink,h=a.height*shrink+caption,gap=guides.length ? 8 : 12;
       if(w>width||h>height)return null;
       const clamp=(x:number,y:number)=>({x:Math.max(0,Math.min(width-w,x)),y:Math.max(0,Math.min(height-h,y))});
-      const guide=guides[index];
+      const guide=guides[index],flow=strategy.startsWith("flow");
       const own=guide ? placed.filter(p=>guides[p.index].group===guide.group) : [];
       const lastInGroup=guide && !order.slice(order.indexOf(index)+1).some(i=>guides[i].group===guide.group);
       const previousRank=guide ? Math.max(-1,...placed.map(p=>guides[p.index].rank).filter(rank=>rank<guide.rank)) : -1;
@@ -54,9 +54,11 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
       const minCenterX=lastInGroup && previous.length
         ? previous.reduce((sum,p)=>sum+p.x+p.width/2,0)/previous.length*(own.length+1)
           -own.reduce((sum,p)=>sum+p.x+p.width/2,0) : -Infinity;
+      // Flow fills across the whole canvas. The collective center still orders
+      // desktops, but individual windows may fill gaps across guide boundaries.
       if(guide){
         let left=Math.max(0,minCenterX-w/2),right=width-w,top=0,bottom=height-h;
-        for(const p of placed){
+        for(const p of flow ? [] : placed){
           const other=guides[p.index];if(other.group===guide.group)continue;
           const home=guide.home,b=other.home,px=p.x+p.width/2,py=p.y+p.height/2;
           if(home.x+home.width<=b.x+.1)right=Math.min(right,px-w/2-.6);
@@ -84,7 +86,7 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
         const home=guides[index]?.home,cx=c.x+w/2,cy=c.y+h/2;
         // Desktops constrain relative center order, never a fixed rectangle.
         // Edges freely interleave; all windows use this same collision pass.
-        if(home && placed.some(p=>{
+        if(home && !flow && placed.some(p=>{
           const other=guides[p.index];
           if(!other || other.group===guides[index].group)return false;
           const b=other.home,px=p.x+p.width/2,py=p.y+p.height/2;
@@ -103,7 +105,16 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
           && c.x+w<=f.x+f.width+.1 && c.y+h<=f.y+f.height+.1).map(f=>
             (f.width*f.height-w*h)/(width*height)
             +(Math.min(c.x-f.x,f.x+f.width-c.x-w)+Math.min(c.y-f.y,f.y+f.height-c.y-h))/Math.max(width,height))) : 0;
-        const cost=strategy.startsWith('fit') ? fit+distance*.02 : strategy.startsWith('compact') ? footprint+distance*.25 : distance;
+        const edge = (c.y+h)/height + c.x/width*.05;
+        const shortSide=strategy.startsWith('short') ? Math.min(...free.filter(f=>c.x>=f.x-.1 && c.y>=f.y-.1
+          && c.x+w<=f.x+f.width+.1 && c.y+h<=f.y+f.height+.1).map(f=>
+          Math.min(f.width-w,f.height-h)/Math.max(width,height)
+          +(Math.min(c.x-f.x,f.x+f.width-c.x-w)+Math.min(c.y-f.y,f.y+f.height-c.y-h))/Math.max(width,height))) : 0;
+        const touch=strategy.startsWith('contact') ? placed.reduce((sum,p)=>sum
+          +(Math.abs(c.x-p.x-p.width-gap)<.2||Math.abs(c.x+w+gap-p.x)<.2 ? Math.max(0,Math.min(c.y+h,p.y+p.height)-Math.max(c.y,p.y)):0)
+          +(Math.abs(c.y-p.y-p.height-gap)<.2||Math.abs(c.y+h+gap-p.y)<.2 ? Math.max(0,Math.min(c.x+w,p.x+p.width)-Math.max(c.x,p.x)):0),
+          (c.x<.1||c.x+w>width-.1?h:0)+(c.y<.1||c.y+h>height-.1?w:0))/(width+height) : 0;
+        const cost=flow ? (c.x+w)/width + c.y/height*0.5 + distance*.005 : strategy.startsWith('contact') ? -touch+distance*.01 : strategy.startsWith('short') ? shortSide+distance*.01 : strategy.startsWith('edge') ? edge+distance*.005 : strategy.startsWith('fit') ? fit+distance*.02 : strategy.startsWith('compact') ? footprint+distance*.25 : distance;
         if(cost<score){best=c;score=cost;}
       }
       if(!best)return null;
@@ -127,26 +138,58 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
     return placed.sort((a,b)=>a.index-b.index).map(n=>tile(n.x,n.y,n.width,n.height,guides.length ? caption : undefined));
   }
   let best:Tile[]=[],largest=0;
-  const strategies=guides.length ? ['area','x','y','small','compact','compact-small','fit','fit-small'] : ['area'];
+  const strategies=guides.length ? ['area','x','y','small','compact','compact-small','fit','fit-small','edge','edge-small','short','short-small','contact','contact-small',...(new Set(guides.map(g=>g.group)).size>1 ? ['flow','flow-small','flow-x','flow-y','flow-height','flow-width'] : [])] : ['area'];
   for(const strategy of strategies){
     order=anchors.map((_,i)=>i).sort((a,b)=>(guides[a]?.rank ?? 0)-(guides[b]?.rank ?? 0)
-      || (strategy==='x' ? anchors[a].x-anchors[b].x : strategy==='y' ? anchors[a].y-anchors[b].y
-        : (strategy.endsWith('small') ? -1 : 1)*(anchors[b].width*anchors[b].height-anchors[a].width*anchors[a].height)) || a-b);
+      || (strategy.endsWith('x') ? anchors[a].x-anchors[b].x : strategy.endsWith('y') ? anchors[a].y-anchors[b].y
+        : strategy.endsWith('height') ? anchors[b].height-anchors[a].height : strategy.endsWith('width') ? anchors[b].width-anchors[a].width : (strategy.endsWith('small') ? -1 : 1)*(anchors[b].width*anchors[b].height-anchors[a].width*anchors[a].height)) || a-b);
     let low=0,high=guides.length ? Math.min(...anchors.map(a=>Math.min(width/a.width,(height-caption)/a.height))) : 1,candidate:Tile[]=[];
     for(let i=0;i<14;i++) {
       const middle=(low+high)/2,result=pack(middle,strategy);
       if(result){low=middle;candidate=result;}else high=middle;
     }
-    if(low>largest){largest=low;best=candidate;}
-  }
-  if(guides.length && best.length){
-    const left=Math.min(...best.map(t=>t.x)),top=Math.min(...best.map(t=>t.y));
-    const spanX=Math.max(...best.map(t=>t.x+t.width))-left,spanY=Math.max(...best.map(t=>t.y+t.height))-top;
-    const zoom=Math.min(width/spanX,height/spanY);
-    const ox=(width-spanX*zoom)/2,oy=(height-spanY*zoom)/2;
-    // Enlarge every preview equally; keep its caption readable without changing
-    // the native width/height ratios or introducing overlaps after the zoom.
-    best=best.map(t=>tile(ox+(t.x-left)*zoom,oy+(t.y-top)*zoom,t.width*zoom,t.preview*zoom+Math.min(32,t.meta*zoom),Math.min(32,t.meta*zoom)));
+    if(guides.length && candidate.length){
+      // Axis compaction removes interior gutters without crossing neighbours.
+      // Flow candidates preserve collective desktop order instead of quadrants.
+      const normalize=(cards:Tile[])=>{
+        const left=Math.min(...cards.map(t=>t.x)),top=Math.min(...cards.map(t=>t.y));
+        const spanX=Math.max(...cards.map(t=>t.x+t.width))-left,spanY=Math.max(...cards.map(t=>t.y+t.height))-top;
+        const zoom=Math.min(width/spanX,height/spanY);
+        return cards.map(t=>tile((width-spanX*zoom)/2+(t.x-left)*zoom,(height-spanY*zoom)/2+(t.y-top)*zoom,
+          t.width*zoom,t.preview*zoom+caption,caption));
+      };
+      const ordered=(cards:Tile[])=>{
+        const ranks=[...new Set(guides.map(g=>g.rank))].sort((a,b)=>a-b);
+        const centers=ranks.map(rank=>{const own=cards.filter((_,i)=>guides[i].rank===rank);return own.reduce((s,t)=>s+t.x+t.width/2,0)/own.length;});
+        return centers.every((x,i)=>!i||x>=centers[i-1]-.1);
+      };
+      const variants=[candidate];
+      for(const first of ['x','y'] as const){
+        const cards=candidate.map(t=>({...t}));
+        for(let pass=0;pass<4;pass++)for(const axis of [first,first==='x'?'y':'x'] as const){
+          const size=axis==='x'?'width':'height',cross=axis==='x'?'y':'x',crossSize=axis==='x'?'height':'width';
+          const indices=cards.map((_,i)=>i).sort((a,b)=>cards[a][axis]+cards[a][size]/2-cards[b][axis]-cards[b][size]/2||a-b);
+          const done:number[]=[];
+          for(const i of indices){
+            const t=cards[i];let start=0;
+            for(const j of done){
+              const p=cards[j];
+              if(t[cross]<p[cross]+p[crossSize]+7.9 && t[cross]+t[crossSize]+7.9>p[cross])
+                start=Math.max(start,p[axis]+p[size]+8);
+              const home=guides[i].home,b=guides[j].home;
+              if(!strategy.startsWith('flow') && guides[i].group!==guides[j].group && b[axis]+b[size]<=home[axis]+.1)
+                start=Math.max(start,p[axis]+p[size]/2-t[size]/2+.6);
+            }
+            t[axis]=Math.min(t[axis],start);done.push(i);
+          }
+        }
+        if(ordered(cards))variants.push(cards);
+      }
+      for(const cards of variants){
+        const normalized=normalize(cards),score=normalized[0].width/anchors[0].width;
+        if(score>largest){largest=score;best=normalized;}
+      }
+    }else if(low>largest){largest=low;best=candidate;}
   }
   return {columns:1,tiles:best.map((t,i)=>({...t,origin:originals[i]}))};
 }

@@ -1,3 +1,4 @@
+import { translate } from "./copy";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { Config, Session, Permissions, Destination, DesktopPreview } from "./types";
 import { call, subscribe, defaults, native, preview, panelLabel, shareSearchDraft } from "./api";
@@ -96,7 +97,7 @@ export default function App() {
   );
 }
 function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
-  const t = (en: string, cn: string) => (zh ? cn : en);
+  const t = (en: string, cn?: string) => translate(zh, en, cn);
   const [draft, setDraft] = useState(initial);
   const [tab, setTab] = useState("general");
   const [permissions, setPermissions] = useState<Permissions>();
@@ -166,7 +167,7 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
     setError("");
     try {
       await call("save_settings", { config: draft });
-      setNotice(t("Settings saved", "设置已保存"));
+      setNotice(t("Settings saved"));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -179,10 +180,7 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
     setNotice("");
     try {
       await call("request_permission", { kind });
-      setNotice(t(
-        "System Settings opened. Enable BeaconHop, then return here.",
-        "已打开系统设置，请开启 BeaconHop 后返回。",
-      ));
+      setNotice(t("System Settings opened. Enable BeaconHop, then return here."));
       setPermissions(await call<Permissions>("get_permissions"));
     } catch (error) {
       setError(String(error));
@@ -199,7 +197,7 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
     return (
       <Setting key={key} title={title} description={description}>
         {permissions?.[key] ? (
-          <span className="badge good">{t("Granted", "已授权")}</span>
+          <span className="badge good">{t("Granted")}</span>
         ) : (
           <button
             className="button secondary"
@@ -208,8 +206,8 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
             onClick={() => requestPermission(kind)}
           >
             {pendingPermission === kind
-              ? t("Opening…", "正在打开…")
-              : t("Open settings", "前往授权")}
+              ? t("Opening…")
+              : t("Open settings")}
           </button>
         )}
       </Setting>
@@ -263,29 +261,29 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
     );
   }
   const tabs: [string, IconName, string, string][] = [
-    ["general", "keyboard", t("Shortcuts", "快捷键"), t("Go from a keystroke to the window you need.", "从一个按键开始，快速抵达目标窗口。")],
-    ["scope", "windows", t("Window scope", "窗口范围"), t("Choose what appears across desktops and displays.", "定义跨桌面、跨显示器的窗口查找范围。")],
-    ["navigation", "layers", t("Navigation layers", "导航层级"), t("Move between windows, apps, tabs and desktops with one familiar gesture.", "使用熟悉的手势，在窗口、应用、Tab 与桌面之间流畅切换。")],
-    ["appearance", "appearance", t("Appearance", "外观"), t("A clear view of your workspace, in your own style.", "调整切换面板与提示样式，让工作空间清晰有序。")],
-    ["plugins", "tabs", t("Application plugins", "应用插件"), t("Install extensions and connect your applications.", "安装扩展，连接常用应用。")],
-    ["screen-buoy", "cursor", "Screen Buoy", t("Reach a desktop or window with BeaconHop. Take action inside it with Screen Buoy.", "用 BeaconHop 抵达桌面或窗口，用 Screen Buoy 操作其中的元素。")],
-    ["system", "settings", t("System & access", "系统与权限"), t("Manage startup, permissions and app health in one place.", "集中管理启动行为、系统权限与应用运行状态。")],
-    ["about", "info", t("About", "关于"), t("Thoughtful tools for a keyboard-first desktop.", "为键盘操作而设计，让桌面工作更专注。")],
+    ["general", "keyboard", t("Shortcuts"), t("Go from a keystroke to the window you need.")],
+    ["scope", "windows", t("Window scope"), t("Choose what appears across desktops and displays.")],
+    ["navigation", "layers", t("Navigation layers"), t("Move between windows, apps, tabs and desktops with one familiar gesture.")],
+    ["appearance", "appearance", t("Appearance"), t("A clear view of your workspace, in your own style.")],
+    ["plugins", "tabs", t("Application plugins"), t("Install extensions and connect your applications.")],
+    ["screen-buoy", "cursor", "Screen Buoy", t("Reach a desktop or window with BeaconHop. Take action inside it with Screen Buoy.")],
+    ["system", "settings", t("System & access"), t("Manage startup, permissions and app health in one place.")],
+    ["about", "info", t("About"), t("Thoughtful tools for a keyboard-first desktop.")],
   ];
   const current = tabs.find(x => x[0] === tab)!;
   const destinations: SettingsDestination[] = [
-    ...tabs.map(([page, icon, title, keywords]) => ({ page, icon, title, keywords: `${page} ${keywords}`, group: t("Settings", "设置") })),
+    ...tabs.map(([page, icon, title, keywords]) => ({ page, icon, title, keywords: `${page} ${keywords}`, group: t("Settings") })),
     ...([
-      ["general", "shortcut-settings", t("Hold & search shortcuts", "按住切换与搜索快捷键"), "keyboard", "hotkey activation 快捷键 热键 搜索"],
+      ["general", "shortcut-settings", t("Hold & search shortcuts"), "keyboard", "hotkey activation 快捷键 热键 搜索"],
       ["general", "hint-characters", t("Hint characters", "提示字符集"), "keyboard", "alphabet letters symbols 字母 标点 hint"],
-      ["navigation", "continuation-settings", t("Continuation gestures", "后续层级手势"), "layers", "hold hint keys 继续 按住 邻键"],
-      ["plugins", "plugin-settings", t("Application plugins", "应用插件"), "tabs", "browser chrome edge vscode codex 浏览器 扩展"],
-      ["scope", "excluded-apps", t("Excluded applications", "排除应用"), "windows", "ignore filter 过滤 排除"],
-      ["appearance", "switcher-settings", t("Theme, language & layout", "主题、语言与布局"), "appearance", "light dark Chinese English 深色 浅色 中英文"],
-      ["appearance", "opacity-settings", t("Switcher background opacity", "切换面板背景不透明度"), "appearance", "transparency blur glass 透明 毛玻璃"],
-      ["appearance", "hint-appearance", t("Hint style", "Hint 样式"), "appearance", "font color border radius shadow 字号 颜色 边框 阴影"],
-      ["system", "permissions-settings", t("Permissions & health", "权限与运行状态"), "shield", "accessibility keyboard screen recording 辅助功能 键盘 录屏"],
-      ["system", "updates-settings", t("App updates", "应用更新"), "info", "version download release 版本 下载 升级"],
+      ["navigation", "continuation-settings", t("Continuation gestures"), "layers", "hold hint keys 继续 按住 邻键"],
+      ["plugins", "plugin-settings", t("Application plugins"), "tabs", "browser chrome edge vscode codex 浏览器 扩展"],
+      ["scope", "excluded-apps", t("Excluded applications"), "windows", "ignore filter 过滤 排除"],
+      ["appearance", "switcher-settings", t("Theme, language & layout"), "appearance", "light dark Chinese English 深色 浅色 中英文"],
+      ["appearance", "opacity-settings", t("Switcher background opacity"), "appearance", "transparency blur glass 透明 毛玻璃"],
+      ["appearance", "hint-appearance", t("Hint style"), "appearance", "font color border radius shadow 字号 颜色 边框 阴影"],
+      ["system", "permissions-settings", t("Permissions & health"), "shield", "accessibility keyboard screen recording 辅助功能 键盘 录屏"],
+      ["system", "updates-settings", t("App updates"), "info", "version download release 版本 下载 升级"],
     ] as [string, string, string, IconName, string][]).map(([page, anchor, title, icon, keywords]) => ({page, anchor, title, icon, keywords, group: tabs.find(x => x[0] === page)![2]})),
   ];
   return (
@@ -293,15 +291,15 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
       <aside>
         <div className="brand">
           <img src="/beaconhop.svg" alt="" />
-          <span>BeaconHop<small>{t("Desktop navigation", "桌面导航")}</small></span>
+          <span>BeaconHop<small>{t("Desktop navigation")}</small></span>
         </div>
-        <nav aria-label={t("Settings navigation", "设置导航")}>
+        <nav aria-label={t("Settings navigation")}>
           {tabs.map(([id, icon, label], index) => (
             <div className="nav-entry" key={id}>
-              {(index === 0 || id === "plugins" || id === "system") && <div className="nav-caption">{index === 0 ? t("WORKSPACE", "工作空间") : id === "plugins" ? t("CONNECTED TOOLS", "协同工具") : t("APPLICATION", "应用")}</div>}
+              {(index === 0 || id === "plugins" || id === "system") && <div className="nav-caption">{index === 0 ? t("WORKSPACE") : id === "plugins" ? t("CONNECTED TOOLS") : t("APPLICATION")}</div>}
               <button aria-label={label} className={tab === id ? "active" : ""} aria-current={tab === id ? "page" : undefined} onClick={() => { setDestination(undefined); setTab(id); }}>
                 <Icon name={icon} /><span className="nav-label">{label}</span>
-                {id === "system" && (needsAccess || needsPreviews) && <span className="permission-nav-dot" aria-label={t("Access needed", "需要授权")} />}
+                {id === "system" && (needsAccess || needsPreviews) && <span className="permission-nav-dot" aria-label={t("Access needed")} />}
                 {tab === id && <span className="nav-active-dot" />}
               </button>
             </div>
@@ -309,89 +307,70 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
         </nav>
         <div className="sidebar-bottom">
           <div className="runtime-status"><span className={"status-dot " + (permissions?.ready ? "ready" : "")} />
-            {!permissions ? t("Checking access…", "正在检测权限…") : permissions.ready ? t("Ready to hop", "随时跳转") : t("Access needed", "需要授权")}
+            {!permissions ? t("Checking access…") : permissions.ready ? t("Ready to hop") : t("Access needed")}
           </div>
           <div className="sidebar-version"><span>BeaconHop</span><span>v{__APP_VERSION__}{preview ? " · Preview" : ""}</span></div>
         </div>
       </aside>
       <main className="settings-main">
         <header className="settings-toolbar">
-          <div className="settings-breadcrumb"><span>{t("Settings", "设置")}</span><Icon name="chevron" size={12} /><strong>{current[2]}</strong></div>
+          <div className="settings-breadcrumb"><span>{t("Settings")}</span><Icon name="chevron" size={12} /><strong>{current[2]}</strong></div>
           <SettingsSearch destinations={destinations} t={t} onNavigate={item => { setTab(item.page); setDestination(item); }} />
         </header>
         <div className="settings-scroll" ref={scrollArea}>
           <header className="page-header">
-            <div><h1>{current[2]}</h1><p>{current[3]}</p></div>
-            {tab === "general" ? <button className="button secondary try-hop" onClick={() => call("open_search").catch(e => setError(String(e)))}><Icon name="hop" size={15} />{t("Try a hop", "试着跳转")}</button> : <span className="page-icon"><Icon name={current[1]} size={24} /></span>}
+            <div><h1>{current[2]}</h1></div>
+            {tab === "general" ? <button className="button secondary try-hop" onClick={() => call("open_search").catch(e => setError(String(e)))}><Icon name="hop" size={15} />{t("Try a hop")}</button> : <span className="page-icon"><Icon name={current[1]} size={24} /></span>}
           </header>
           {tab !== "system" && (needsAccess || needsPreviews) && <div className="permission-banner" role="alert">
-            <div><strong>{needsAccess ? t("Allow access to start switching windows", "先完成授权，才能切换窗口") : t("Allow Screen Recording to see window previews", "开启屏幕录制，才能显示窗口缩略图")}</strong>
-              <p>{needsAccess ? t("Global shortcuts are unavailable. You can still edit and save settings.", "当前全局快捷键不可用，仍可编辑和保存设置。") : t("Window switching is ready; previews still need access.", "窗口切换已就绪，缩略图还需要授权。")}</p></div>
-            <button className="button secondary" onClick={() => setTab("system")}>{t("Set up access", "前往授权")}</button>
+            <div><strong>{needsAccess ? t("Allow access to start switching windows") : t("Allow Screen Recording to see window previews")}</strong>
+              <p>{needsAccess ? t("Global shortcuts are unavailable. You can still edit and save settings.") : t("Window switching is ready; previews still need access.")}</p></div>
+            <button className="button secondary" onClick={() => setTab("system")}>{t("Set up access")}</button>
           </div>}
           {tab === "plugins" && <PluginStatus t={t} />}
           {tab === "general" && (
             <>
-              <div className="plugin-welcome"><div><strong>{t("Connect your browser and editor", "连接浏览器和编辑器")}</strong><p>{t("Install application plugins to switch tabs with BeaconHop.", "安装应用插件，即可用 BeaconHop 切换标签页。")}</p></div><button className="button secondary" onClick={()=>setTab("plugins")}>{t("Set up plugins", "安装插件")}</button></div>
-              <div className="hero">
-                <div className="hero-copy"><span className="eyebrow">{t("A SHORTER PATH TO YOUR WORK", "从目标到行动，更少一步")}</span>
-                  <h2>{t("Your next window. One hint away.", "一个提示，直达目标窗口。")}</h2>
-                  <p>{t("Hold the shortcut. Type a hint. You’re there.", "按住快捷键，输入提示字符，即刻切换。")}</p>
-                  <div className="hero-flow"><kbd>{shortcut(draft.holdShortcut)}</kbd><Icon name="arrow" size={14} /><kbd>{[...draft.hintAlphabet][0]?.replace(" ", "␣") || "A"}</kbd><Icon name="arrow" size={14} /><span><Icon name="windows" size={14} />{t("Your window", "目标窗口")}</span></div>
-                </div>
-                <div className="hero-window" aria-hidden="true"><div className="hero-window-bar"><i /><i /><i /></div><div className="hero-window-content"><div /><div /><kbd>{[...draft.hintAlphabet][0]?.replace(" ", "␣") || "A"}</kbd></div></div>
-              </div>
+
+
               <section id="shortcut-settings" tabIndex={-1}>
-                <h2>{t("Two ways to get there", "两种抵达方式")}</h2>
+                <h2>{t("Two ways to get there")}</h2>
                 {toggle(
                   "holdEnabled",
-                  t("Hold to switch", "按住切换"),
-                  t(
-                    "Hold the modifier, then type a hint to jump immediately.",
-                    "按住修饰键，输入屏幕提示字符后立即切换。",
-                  ),
+                  t("Hold to switch"),
+                  t("Type a hint while holding."),
                 )}
                 <Setting
-                  title={t("Hold shortcut", "按住模式快捷键")}
-                  description={t(
-                    `${shortcut(draft.holdShortcut)} cycles forward; ${shortcut(reverseShortcut(draft.holdShortcut))} cycles backward. Keep the modifiers held, then release to switch. Esc cancels and returns to the original window.`,
-                    `${shortcut(draft.holdShortcut)} 正向循环；${shortcut(reverseShortcut(draft.holdShortcut))} 反向循环。保持修饰键按住，松开后切换到选中窗口。Esc 取消本次切换并返回原窗口。`,
-                  )}
+                  title={t("Hold shortcut")}
+                  description={t("Release to switch. Shift reverses; Esc cancels.")}
                 >
                   <Shortcut
                     value={draft.holdShortcut}
                     onChange={(v) => change("holdShortcut", v)}
-                    label={t("Hold shortcut", "按住模式快捷键")}
+                    label={t("Hold shortcut")}
                     zh={zh}
                     defaultValue={defaults.holdShortcut}
                   />
                 </Setting>
                 <Setting
-                  title={t("Search shortcut", "搜索模式快捷键")}
-                  description={t(
-                    "Open search directly. Type a title or application name. Esc cancels and returns to the original window.",
-                    "直接打开搜索，可以松开快捷键，输入标题或应用名。Esc 取消本次切换并返回原窗口。",
-                  )}
+                  title={t("Search shortcut")}
+                  description={t("Search by title or app.")}
                 >
                   <Shortcut
                     value={draft.searchShortcut}
                     onChange={(v) => change("searchShortcut", v)}
-                    label={t("Search shortcut", "搜索模式快捷键")}
+                    label={t("Search shortcut")}
                     zh={zh}
                     defaultValue={defaults.searchShortcut}
                   />
                 </Setting>
                 <Setting
-                  title={t("Search key while holding", "按住时进入搜索")}
-                  description={t(
-                    "Press this key in hold mode to enter search, then release the modifier. Choose a key that is not used for hints or cycling.",
-                    "在按住模式按此键进入搜索，之后可以松开修饰键。不要与提示字母或循环键重复。",
-                  )}
+                  title={t("Search key while holding")}
+                  description={t("Use a key outside the hint alphabet.")}
                 >
                   <Shortcut
                     value={draft.searchEntryKey}
                     onChange={(v) => change("searchEntryKey", v)}
-                    label={t("Search key while holding", "按住时进入搜索")}
+                    label={t("Search key while holding")}
                     zh={zh}
                     defaultValue={defaults.searchEntryKey}
                     singleKey
@@ -402,23 +381,23 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
             </>
           )}
           {tab === "navigation" && <>
-            <div className="layer-overview" aria-label={t("Four navigation layers", "四个导航层级")}>
+            <div className="layer-overview" aria-label={t("Four navigation layers")}>
               {([
-                ["windows", t("All windows", "全部窗口"), draft.holdShortcut],
-                ["windows", t("App windows", "应用窗口"), draft.applicationHoldShortcut],
-                ["tabs", t("Tabs & sessions", "Tab 与会话"), draft.tabsHoldShortcut],
-                ["desktop", t("Desktops", "桌面"), draft.desktopsHoldShortcut],
+                ["windows", t("All windows"), draft.holdShortcut],
+                ["windows", t("App windows"), draft.applicationHoldShortcut],
+                ["tabs", t("Tabs & sessions"), draft.tabsHoldShortcut],
+                ["desktop", t("Desktops"), draft.desktopsHoldShortcut],
               ] as [IconName, string, string][]).map(([icon, title, keys], index) => <div className="layer-tile" key={title}><span className="layer-number">0{index + 1}</span><Icon name={icon} size={21} /><strong>{title}</strong><kbd>{shortcut(keys)}</kbd></div>)}
             </div>
             <section>
-              <h2>{t("One gesture, four layers", "同一套手势，四个层级")}</h2>
-              <p>{t("Each layer has its own hold and search shortcut. Hold to cycle through targets, or open search and type. Customize the application, tab and desktop layers below.", "每个层级都有独立的按住切换与搜索快捷键。按住时循环选择目标，或进入搜索后输入关键词。在下方配置应用、Tab 和桌面层级。")}</p>
+              <h2>{t("One gesture, four layers")}</h2>
+
               {([
-                ["applicationEnabled", "applicationHoldShortcut", "applicationSearchShortcut", t("Application windows", "应用窗口")],
-                ["tabsEnabled", "tabsHoldShortcut", "tabsSearchShortcut", t("Tabs & sessions", "Tab 与会话")],
-                ["desktopsEnabled", "desktopsHoldShortcut", "desktopsSearchShortcut", t("Desktops", "桌面")],
+                ["applicationEnabled", "applicationHoldShortcut", "applicationSearchShortcut", t("Application windows")],
+                ["tabsEnabled", "tabsHoldShortcut", "tabsSearchShortcut", t("Tabs & sessions")],
+                ["desktopsEnabled", "desktopsHoldShortcut", "desktopsSearchShortcut", t("Desktops")],
               ] as const).map(([enabled, hold, search, label]) => <div className="layer-settings" key={enabled}>
-                <Setting title={label} description={enabled === "tabsEnabled" ? t("Applications without a connected plugin keep their native shortcuts.", "未连接插件的应用保留原生快捷键。") : ""}>
+                <Setting title={label} description={enabled === "tabsEnabled" ? t("Applications without a connected plugin keep their native shortcuts.") : ""}>
                   <input type="checkbox" aria-label={label} checked={draft[enabled]} onChange={e=>change(enabled,e.target.checked)} />
                 </Setting>
                 <Setting title={t(`${label} · hold`, `${label} · 按住切换`)}>
@@ -430,78 +409,63 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
               </div>)}
             </section>
             <section id="continuation-settings" tabIndex={-1}>
-              <h2>{t("Keep holding the last hint key", "继续按住最后一个 hint 键")}</h2>
-              <p>{t("After a hint selects a target, keep its last key held and press a continuation key. BH and Screen Buoy start on that key press. In the next BH layer, you can use a new hint while the old keys remain held; releasing or holding those old keys will not select anything. Desktop hints open desktop-wide SB; the other layers open window-wide SB. Each action accepts multiple alternative keys; SB defaults to HintLeftKey or HintRightKey when enabled.", "用 hint 选中目标后，继续按住最后一键，再按任一后续键，立即进入 BH 下一层或接续 SB。进入 BH 新层后可直接输入新 hint，无需先松开旧键；旧键长按或松开不会误选。桌面 hint 进入桌面级 SB，其余层进入窗口级。每个动作可配置多个备选键；启用 SB 后，默认 HintLeftKey 或 HintRightKey 都可触发。")}</p>
+              <h2>{t("Keep holding the last hint key")}</h2>
+              <p>{t("Hold the last hint key, then press a key below.")}</p>
               {([
-                ["windowsHintKeys", t("Continue to windows", "继续进入窗口层")],
-                ["applicationHintKeys", t("Continue to application windows", "继续进入应用窗口层")],
-                ["tabsHintKeys", t("Continue to tabs", "继续进入 tab 层")],
+                ["windowsHintKeys", t("Continue to windows")],
+                ["applicationHintKeys", t("Continue to application windows")],
+                ["tabsHintKeys", t("Continue to tabs")],
               ] as const).map(([key,label]) => <Setting key={key} title={label}>
                 <ContinuationKeys label={label} value={draft[key]} onChange={keys=>change(key,keys)} t={t} />
               </Setting>)}
-              <p className="muted small">{t("Super = Win / Command. The Screen Buoy page controls its trigger and the physical neighbour map.", "Super = Win / Command。SB 触发键与物理邻键映射在 Screen Buoy 页面设置。")}</p>
+              <p className="muted small">{t("Super = Win / Command. The Screen Buoy page controls its trigger and the physical neighbour map.")}</p>
             </section>
-            <button className="button" onClick={()=>setTab("plugins")}>{t("Set up application plugins", "安装应用插件")}</button>
-            <section><Setting title={t("Codex data folder", "Codex 数据目录")} description={t("Leave empty to use Codex’s default. This adapter lists recent sessions; it does not read full conversations. Session links cannot confirm which GUI tab is selected, so automatic continuation is disabled for Codex.", "留空使用 Codex 默认目录。适配器列出最近会话，不读取完整对话。会话链接无法确认 GUI 中的选中状态，因此 Codex 会话跳转后暂不自动接后续层。") }>
-              <input aria-label={t("Codex data folder", "Codex 数据目录")} value={draft.codexHome} onChange={e=>change("codexHome",e.target.value)} />
+            <button className="button" onClick={()=>setTab("plugins")}>{t("Set up application plugins")}</button>
+            <section><Setting title={t("Codex data folder")} description={t("Empty uses the default folder. Session links do not support continuation.") }>
+              <input aria-label={t("Codex data folder")} value={draft.codexHome} onChange={e=>change("codexHome",e.target.value)} />
             </Setting></section>
           </>}
           {tab === "screen-buoy" && <ScreenBuoyIntegration value={draft.screenBuoy} alphabet={draft.hintAlphabet} onChange={v => change("screenBuoy", v)} t={t} />}
           {tab === "scope" && (
             <>
               <section>
-                <h2>{t("Where to look", "查找范围")}</h2>
+                <h2>{t("Where to look")}</h2>
                 {select(
                   "desktopScope",
-                  t("Virtual desktops", "虚拟桌面"),
-                  t(
-                    "A hop follows the window to its desktop; it does not move the window.",
-                    "切换时跟随窗口前往它所在的桌面，窗口位置保持不变。",
-                  ),
+                  t("Virtual desktops"),
+                  t("A hop follows the window to its desktop; it does not move the window."),
                   [
-                    ["all", t("All desktops", "所有桌面")],
-                    ["current", t("Current desktop", "当前桌面")],
+                    ["all", t("All desktops")],
+                    ["current", t("Current desktop")],
                   ],
                 )}
                 {select(
                   "displayScope",
-                  t("Displays", "显示器"),
-                  t(
-                    "Current display follows the window you are working in.",
-                    "当前显示器以正在使用的窗口为准。",
-                  ),
+                  t("Displays"),
+                  t("Current display follows the window you are working in."),
                   [
-                    ["all", t("All displays", "所有显示器")],
-                    ["current", t("Current display", "当前显示器")],
+                    ["all", t("All displays")],
+                    ["current", t("Current display")],
                   ],
                 )}
                 {toggle(
                   "includeMinimized",
-                  t("Minimized windows", "包含最小化窗口"),
-                  t(
-                    "Restore a minimized window when you choose it.",
-                    "选择后恢复最小化的窗口。",
-                  ),
+                  t("Minimized windows"),
+                  t(""),
                 )}
                 {toggle(
                   "includeHidden",
-                  t("Hidden applications", "包含隐藏应用"),
-                  t(
-                    "Include windows from applications hidden on macOS.",
-                    "包含 macOS 上被隐藏的应用窗口。",
-                  ),
+                  t("Hidden applications"),
+                  t(""),
                 )}
               </section>
               <section id="excluded-apps" tabIndex={-1}>
-                <h2>{t("Keep these out", "排除这些应用")}</h2>
+                <h2>{t("Keep these out")}</h2>
                 <p className="muted">
-                  {t(
-                    "One exact app name or bundle ID / executable path per line. Empty means no exclusions; the examples below are only suggestions.",
-                    "每行一个完整应用名，或 bundle ID / 可执行文件路径。留空表示不排除；下方灰字仅为示例。",
-                  )}
+                  {t("One app name, bundle ID or executable path per line.")}
                 </p>
                 <textarea
-                  aria-label={t("Excluded applications", "排除应用")}
+                  aria-label={t("Excluded applications")}
                   placeholder={
                     isMac
                       ? "com.example.app\nExample App"
@@ -519,121 +483,85 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
           {tab === "appearance" && (
             <>
               <section id="switcher-settings" tabIndex={-1}>
-                <h2>{t("Switcher", "切换面板")}</h2>
+                <h2>{t("Switcher")}</h2>
                 {toggle(
                   "thumbnails",
-                  t("Window previews", "窗口缩略图"),
-                  t(
-                    "Previews load in the background. Protected windows may show an app placeholder.",
-                    "预览在后台加载；受保护的窗口可能显示应用占位图。",
-                  ),
+                  t("Window previews"),
+                  t("Previews load in the background. Protected windows may show an app placeholder."),
                 )}
                 {select(
                   "layout",
-                  t("Layout", "布局"),
-                  t(
-                    "All windows fit on screen, most recently used first.",
-                    "所有窗口平铺在一屏内，最近使用的窗口优先。",
-                  ),
+                  t("Layout"),
+                  t("Used for application windows; all-window overview stays spatial."),
                   [
-                    ["grid", t("Grid", "网格")],
-                    ["list", t("List", "列表")],
+                    ["grid", t("Grid")],
+                    ["list", t("List")],
                   ],
                 )}
-                {select("theme", t("Theme", "主题"), "", [
-                  ["system", t("Follow system", "跟随系统")],
-                  ["dark", t("Dark", "深色")],
-                  ["light", t("Light", "浅色")],
+                {select("theme", t("Theme"), "", [
+                  ["system", t("Follow system")],
+                  ["dark", t("Dark")],
+                  ["light", t("Light")],
                 ])}
-                {select("language", t("Language", "语言"), "", [
-                  ["system", t("Follow system", "跟随系统")],
+                {select("language", t("Language"), "", [
+                  ["system", t("Follow system")],
                   ["en", "English"],
                   ["zh", "简体中文"],
                 ])}
               </section>
               <section id="opacity-settings" tabIndex={-1}>
-                <Setting title={t("Switcher background opacity", "切换面板背景不透明度")} description={t("Applies to the window overview opened by a shortcut. Lower values reveal more of the frosted desktop; thumbnails and hints stay clear. Save, then open the switcher to try it.", "控制快捷键唤起后的整个窗口总览背景。数值越低，毛玻璃透出越多；缩略图与 Hint 保持清晰。保存后唤起即可查看。") }>
-                  <input aria-label={t("Switcher background opacity", "切换面板背景不透明度")} type="range" min={0} max={100} value={draft.panelOpacity} onChange={e => change("panelOpacity",Number(e.target.value))} /><output>{draft.panelOpacity}%</output>
+                <Setting title={t("Switcher background opacity")} description={t("Lower values reveal more of the desktop.") }>
+                  <input aria-label={t("Switcher background opacity")} type="range" min={0} max={100} value={draft.panelOpacity} onChange={e => change("panelOpacity",Number(e.target.value))} /><output>{draft.panelOpacity}%</output>
                 </Setting>
               </section>
               <HintAppearance value={draft.hintStyle} defaults={defaults.hintStyle} onChange={value => change("hintStyle",value)} t={t} />
-              <div className="appearance-preview">
-                <div className="mini-card">
-                  <div className="mini-screen">
-                    <span>↗</span>
-                  </div>
-                  <div>
-                    <kbd>A</kbd> BeaconHop
-                  </div>
-                </div>
-                <div>
-                  <h2>{t("A signal, then a hop.", "一个信号，一次抵达。")}</h2>
-                  <p className="muted">
-                    {t(
-                      "High contrast hints stay easy to find.",
-                      "高对比提示，让目标一眼可见。",
-                    )}
-                  </p>
-                </div>
-              </div>
+
             </>
           )}
           {tab === "system" && (
             <>
-              {permissions?.required && (needsAccess || needsPreviews) && <section className="permission-setup" role="region" aria-label={t("Finish setting up BeaconHop", "完成 BeaconHop 授权")}>
-                <div className="eyebrow">{t("SETUP REQUIRED", "需要完成授权")}</div>
-                <h2>{!permissions.accessibility ? t("Enable Accessibility to start hopping", "先开启辅助功能，开始切换窗口") : !permissions.keyboardHook ? t("Accessibility is allowed. Connect the keyboard listener.", "辅助功能已授权，键盘监听尚未连接") : t("One more step for window previews", "再开启屏幕录制，显示窗口缩略图")}</h2>
-                <p>{!permissions.accessibility ? t("Open System Settings, enable BeaconHop under Privacy & Security → Accessibility, then return here. The status refreshes automatically.", "打开系统设置，在「隐私与安全性 → 辅助功能」开启 BeaconHop，再返回这里，状态会自动更新。") : !permissions.keyboardHook ? t("Wait briefly for the listener. If it stays disconnected, restart BeaconHop.", "请稍候等待连接；如果仍未就绪，重启 BeaconHop。") : t("Screen Recording is used for thumbnails. You can switch windows without granting it.", "屏幕录制用于生成缩略图；暂不授权也可以切换窗口。")}</p>
-                <div className="permission-steps"><span className={permissions.accessibility ? "done" : ""}>1 · {t("Accessibility · Required", "辅助功能 · 必需")}</span><span className={permissions.keyboardHook ? "done" : ""}>2 · {t("Keyboard listener", "键盘监听")}</span><span className={permissions.screenRecording ? "done" : ""}>3 · {t("Screen Recording · Previews", "屏幕录制 · 缩略图")}</span></div>
+              {permissions?.required && (needsAccess || needsPreviews) && <section className="permission-setup" role="region" aria-label={t("Finish setting up BeaconHop")}>
+
+                <h2>{!permissions.accessibility ? t("Enable Accessibility to start hopping") : !permissions.keyboardHook ? t("Accessibility is allowed. Connect the keyboard listener.") : t("One more step for window previews")}</h2>
+                <p>{!permissions.accessibility ? t("Open System Settings, enable BeaconHop under Privacy & Security → Accessibility, then return here. The status refreshes automatically.") : !permissions.keyboardHook ? t("Wait briefly for the listener. If it stays disconnected, restart BeaconHop.") : t("Screen Recording is used for thumbnails. You can switch windows without granting it.")}</p>
+
                 <div className="permission-actions">
-                  {!permissions.accessibility ? <button className="button primary" disabled={pendingPermission !== null} onClick={() => requestPermission("accessibility")}>{t("Open Accessibility settings", "打开辅助功能设置")}</button>
-                    : !permissions.keyboardHook ? <button className="button primary" onClick={() => call("restart_application").catch((e) => setError(String(e)))}>{t("Restart BeaconHop", "重启 BeaconHop")}</button>
-                    : <button className="button primary" disabled={pendingPermission !== null} onClick={() => requestPermission("screen")}>{t("Enable window previews", "开启窗口缩略图")}</button>}
-                  <button className="button secondary" onClick={() => call<Permissions>("get_permissions").then(setPermissions).catch((e) => setError(String(e)))}>{t("Check again", "重新检测")}</button>
+                  {!permissions.accessibility ? <button className="button primary" disabled={pendingPermission !== null} onClick={() => requestPermission("accessibility")}>{t("Open Accessibility settings")}</button>
+                    : !permissions.keyboardHook ? <button className="button primary" onClick={() => call("restart_application").catch((e) => setError(String(e)))}>{t("Restart BeaconHop")}</button>
+                    : <button className="button primary" disabled={pendingPermission !== null} onClick={() => requestPermission("screen")}>{t("Enable window previews")}</button>}
+                  <button className="button secondary" onClick={() => call<Permissions>("get_permissions").then(setPermissions).catch((e) => setError(String(e)))}>{t("Check again")}</button>
                 </div>
-                <details className="permission-troubleshooting"><summary>{t("Already enabled, but still not working?", "已经开启，仍显示未授权？")}</summary><p>{t("After an app update, remove the old BeaconHop entry from Accessibility, add this installed app again and restart.", "更新应用后，若开关已开启仍未就绪，请移除辅助功能中的旧 BeaconHop，重新添加当前应用并重启。")}</p><p className="app-path">{permissions.appPath}</p><button className="button secondary" onClick={() => call("restart_application").catch((e) => setError(String(e)))}>{t("Restart BeaconHop", "重启 BeaconHop")}</button></details>
+                <details className="permission-troubleshooting"><summary>{t("Already enabled, but still not working?")}</summary><p>{t("After an app update, remove the old BeaconHop entry from Accessibility, add this installed app again and restart.")}</p><p className="app-path">{permissions.appPath}</p><button className="button secondary" onClick={() => call("restart_application").catch((e) => setError(String(e)))}>{t("Restart BeaconHop")}</button></details>
               </section>}
               <section>
-                <h2>{t("Make it part of your day", "随时待命")}</h2>
+                <h2>{t("Make it part of your day")}</h2>
                 {toggle(
                   "startAtLogin",
-                  t("Launch at login", "登录时启动"),
-                  t(
-                    "Keep BeaconHop ready as soon as you log in.",
-                    "登录后，BeaconHop 随时待命。",
-                  ),
+                  t("Launch at login"),
+                  t(""),
                 )}
                 {toggle(
                   "startInTray",
-                  t("Start quietly", "启动时收起设置"),
-                  t(
-                    "Keep settings closed and run from the menu bar or system tray.",
-                    "在菜单栏或系统托盘运行。",
-                  ),
+                  t("Start quietly"),
+                  t("Keep settings closed and run from the menu bar or system tray."),
                 )}
               </section>
               <section id="permissions-settings" tabIndex={-1}>
-                <h2>{t("Permissions & health", "权限与运行状态")}</h2>
+                <h2>{t("Permissions & health")}</h2>
                 {permissions?.required ? (
                   <>
                     {[
                       [
                         "accessibility",
                         "accessibility",
-                        t("Accessibility", "辅助功能"),
-                        t(
-                          "Find and focus individual windows.",
-                          "查找和聚焦具体窗口。",
-                        ),
+                        t("Accessibility"),
+                        t("Find and focus individual windows."),
                       ],
                       [
                         "screenRecording",
                         "screen",
-                        t("Screen recording", "屏幕录制"),
-                        t(
-                          "Capture window previews. Switching works without previews.",
-                          "生成窗口预览；未授权时仍可使用窗口切换。",
-                        ),
+                        t("Screen recording"),
+                        t("Capture window previews. Switching works without previews."),
                       ],
                     ].map(([key, kind, title, description]) =>
                       permissionSetting(
@@ -642,26 +570,17 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                       ),
                     )}
                     <p className="small muted">
-                      {t(
-                        "After changing macOS permissions, a restart may be required.",
-                        "更改 macOS 权限后，可能需要退出并重新打开应用。",
-                      )}
+                      {t("After changing macOS permissions, a restart may be required.")}
                     </p>
                   </>
                 ) : (
                   <p className="muted">
-                    {t(
-                      "No additional permissions are normally required on Windows.",
-                      "Windows 通常无需额外授权。",
-                    )}
+                    {t("No additional permissions are normally required on Windows.")}
                   </p>
                 )}
                 <Setting
-                  title={t("Keyboard listener", "键盘监听")}
-                  description={t(
-                    "The native listener must be running for global shortcuts.",
-                    "全局快捷键需要原生监听正常运行。",
-                  )}
+                  title={t("Keyboard listener")}
+                  description={t("The native listener must be running for global shortcuts.")}
                 >
                   <span
                     className={
@@ -670,29 +589,26 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                     }
                   >
                     {permissions?.keyboardHook
-                      ? t("Running", "运行中")
-                      : t("Not ready", "未就绪")}
+                      ? t("Running")
+                      : t("Not ready")}
                   </span>
                 </Setting>
                 {permissions?.required && !permissions.keyboardHook && (
                   <details className="permission-troubleshooting">
-                    <summary>{t("Keyboard troubleshooting", "键盘监听排查")}</summary>
+                    <summary>{t("Keyboard troubleshooting")}</summary>
                     <p className="small muted">
-                      {t(
-                        "Accessibility normally enables shortcuts. If it is already granted and the listener is still unavailable, check Input Monitoring and restart BeaconHop.",
-                        "辅助功能通常已能启用快捷键。如果已授权但监听仍未就绪，再检查输入监控并重启 BeaconHop。",
-                      )}
+                      {t("Accessibility normally enables shortcuts. If it is already granted and the listener is still unavailable, check Input Monitoring and restart BeaconHop.")}
                     </p>
                     {permissionSetting(
                       "inputMonitoring", "input",
-                      t("Input monitoring", "输入监控"),
-                      t("Optional keyboard-listener recovery.", "仅用于键盘监听异常时的排查。"),
+                      t("Input monitoring"),
+                      t("Optional keyboard-listener recovery."),
                     )}
                   </details>
                 )}
               </section>
               <section>
-                <h2>{t("Diagnostics", "诊断")}</h2>
+                <h2>{t("Diagnostics")}</h2>
                 <button
                   className="button secondary"
                   onClick={() =>
@@ -701,7 +617,7 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                       .catch((e) => setError(String(e)))
                   }
                 >
-                  {t("Show diagnostics", "查看诊断信息")}
+                  {t("Show diagnostics")}
                 </button>
                 {diagnostics && (
                   <pre className="diagnostics">{diagnostics}</pre>
@@ -715,26 +631,15 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
               <img src="/beaconhop.svg" alt="" />
               <h1>BeaconHop</h1>
               <p className="tagline">Follow the hint. Make the hop.</p>
-              <p>
-                {t(
-                  "A little beacon for any window you want to reach.",
-                  "想去哪个窗口，就循着提示抵达。",
-                )}
-              </p>
+
               <span className="badge">{__APP_VERSION__} · macOS & Windows</span>
-              <button className="about-companion" onClick={() => setTab("screen-buoy")}><img src="/screen-buoy.png" alt="" /><span><strong>Screen Buoy</strong><small>{t("Continue inside desktops and windows", "在桌面或窗口内继续操作")}</small></span><Icon name="arrow" /></button>
+              <button className="about-companion" onClick={() => setTab("screen-buoy")}><img src="/screen-buoy.png" alt="" /><span><strong>Screen Buoy</strong><small>{t("Continue inside desktops and windows")}</small></span><Icon name="arrow" /></button>
               <div className="about-details">
                 <p>
-                  {t(
-                    "Built on Screen Buoy. Licensed under MIT.",
-                    "基于 Screen Buoy 改造，采用 MIT 开源许可证。",
-                  )}
+                  {t("Built on Screen Buoy. Licensed under MIT.")}
                 </p>
                 <p>
-                  {t(
-                    "Window discovery, search and previews stay on your computer.",
-                    "窗口发现、搜索与预览均在本机处理。",
-                  )}
+                  {t("Window discovery, search and previews stay on your computer.")}
                 </p>
               </div>
             </div>
@@ -748,19 +653,16 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
             {error ||
               notice ||
               (dirty
-                ? t("Unsaved changes", "有未保存的修改")
-                : t(
-                    "All changes saved",
-                    "所有更改已保存",
-                  ))}
+                ? t("Unsaved changes")
+                : t("All changes saved"))}
           </span>
           <div>
             <button className="button ghost" disabled={dirty || busy || updateBusy}
-              title={dirty ? t("Save or discard your changes before restarting", "请先保存或撤销修改，再重启") : undefined}
+              title={dirty ? t("Save or discard your changes before restarting") : undefined}
               onClick={async () => {
-                try { setNotice(t("Restarting…", "正在重启…")); await call("restart_application"); }
+                try { setNotice(t("Restarting…")); await call("restart_application"); }
                 catch (e) { setError(String(e)); }
-              }}>{t("Restart BeaconHop", "重启 BeaconHop")}</button>
+              }}>{t("Restart BeaconHop")}</button>
             <button
               className="button ghost"
               disabled={!dirty || busy || updateBusy}
@@ -770,14 +672,14 @@ function Settings({ initial, zh }: { initial: Config; zh: boolean }) {
                 setNotice("");
               }}
             >
-              {t("Discard", "撤销")}
+              {t("Discard")}
             </button>
             <button
               className="button primary"
               disabled={!dirty || busy || updateBusy}
               onClick={save}
             >
-              {busy ? t("Saving…", "保存中…") : t("Save changes", "保存设置")}
+              {busy ? t("Saving…") : t("Save changes")}
             </button>
           </div>
         </footer>
@@ -814,9 +716,9 @@ function Shortcut({ value, onChange, label, zh, defaultValue, singleKey = false 
   const finish = useRef((next: string) => {});
   finish.current = (next) => {
     if (next) {
-      setFeedback(next === value ? (zh ? "已是当前快捷键" : "Shortcut unchanged") : (zh ? "已录入，保存后生效" : "Recorded. Save to apply."));
+      setFeedback(next === value ? (translate(zh, "Shortcut unchanged")) : (translate(zh, "Recorded. Save to apply.")));
       onChange(next);
-    } else setFeedback(zh ? "已取消录入" : "Recording cancelled");
+    } else setFeedback(translate(zh, "Recording cancelled"));
     setRecording(false);
     setManual(false);
   };
@@ -824,8 +726,8 @@ function Shortcut({ value, onChange, label, zh, defaultValue, singleKey = false 
     const next = parseShortcutText(text, singleKey);
     if (next) finish.current(next);
     else setFeedback(singleKey
-      ? (zh ? "请输入单个按键，例如 `、\\ 或 Space，不需要修饰键。" : "Use one key without modifiers, such as `, \\ or Space.")
-      : (zh ? "请输入修饰键 + 按键，例如 Win + ` 或 Win + \\" : "Use a modifier and key, such as Win + ` or Win + \\"));
+      ? (translate(zh, "Use one key without modifiers, such as `, \\ or Space."))
+      : (translate(zh, "Use a modifier and key, such as Win + ` or Win + \\")));
   };
   useEffect(() => {
     if (!recording) return;
@@ -836,7 +738,7 @@ function Shortcut({ value, onChange, label, zh, defaultValue, singleKey = false 
       if (disposed) { off(); return; }
       const ready = await call<boolean>("record_shortcut", { enabled: true, singleKey });
       if (disposed) { await call("record_shortcut", { enabled: false }); return; }
-      if (native && !ready) setFeedback(zh ? "辅助功能尚未就绪；若按键被系统或其他应用接走，请使用手动输入。" : "Accessibility is not ready. Use manual entry if another app or macOS intercepts the keys.");
+      if (native && !ready) setFeedback(translate(zh, "Accessibility is not ready. Use manual entry if another app or macOS intercepts the keys."));
     })().catch((e) => { if (!disposed) { setFeedback(String(e)); setRecording(false); } });
     return () => {
       disposed = true;
@@ -864,26 +766,26 @@ function Shortcut({ value, onChange, label, zh, defaultValue, singleKey = false 
         const next = parseShortcutText([...modifiers, key].join("+"), singleKey);
         if (next) finish.current(next);
         else setFeedback(singleKey
-          ? (zh ? "请单独按下目标键，不需要修饰键。" : "Press the target key on its own, without modifiers.")
-          : (zh ? "请同时按住 Alt、Ctrl 或 Win / ⌘，再按目标键。" : "Hold Alt, Ctrl or Win / Command with the target key."));
+          ? (translate(zh, "Press the target key on its own, without modifiers."))
+          : (translate(zh, "Hold Alt, Ctrl or Win / Command with the target key.")));
       }}
-    >{recording ? (zh ? "请按下快捷键…" : "Press shortcut…") : shortcut(value)}</button>
-    <button className="shortcut-reset" aria-label={zh ? `手动输入${label}` : `Enter ${label} manually`} onClick={() => { setRecording(false); setManual(true); setText(value); setFeedback(""); }}>{zh ? "手动输入" : "Enter manually"}</button>
-    <button className="shortcut-reset" aria-label={zh ? `恢复${label}默认值` : `Restore default ${label}`} onClick={() => finish.current(defaultValue)}>{zh ? "恢复默认" : "Restore default"}</button>
+    >{recording ? (translate(zh, "Press shortcut…")) : shortcut(value)}</button>
+    <button className="shortcut-reset" aria-label={zh ? `手动输入${label}` : `Enter ${label} manually`} onClick={() => { setRecording(false); setManual(true); setText(value); setFeedback(""); }}>{translate(zh, "Enter manually")}</button>
+    <button className="shortcut-reset" aria-label={zh ? `恢复${label}默认值` : `Restore default ${label}`} onClick={() => finish.current(defaultValue)}>{translate(zh, "Restore default")}</button>
     {manual && <div className="shortcut-manual">
       <input autoFocus value={text} aria-label={zh ? `${label}文本` : `${label} text`} spellCheck={false} placeholder={singleKey ? "`" : "Win + `"} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => {
         if (e.key === "Enter") { e.preventDefault(); applyText(); }
         if (e.key === "Escape") { e.preventDefault(); finish.current(""); }
       }} />
-      <button className="shortcut-reset" onClick={applyText}>{zh ? "确认" : "Apply"}</button>
-      <button className="shortcut-reset" onClick={() => finish.current("")}>{zh ? "取消" : "Cancel"}</button>
+      <button className="shortcut-reset" onClick={applyText}>{translate(zh, "Apply")}</button>
+      <button className="shortcut-reset" onClick={() => finish.current("")}>{translate(zh, "Cancel")}</button>
     </div>}
     <span className="shortcut-feedback" role="status">{feedback}</span>
   </div>;
 }
 
 function Switcher({ config, zh }: { config: Config; zh: boolean }) {
-  const t = (en: string, cn: string) => (zh ? cn : en);
+  const t = (en: string, cn?: string) => translate(zh, en, cn);
   const [session, setSession] = useState<Session>();
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
@@ -1016,12 +918,14 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
   })() : contentLayer && listLayout
     ? textRows(visible, available.width)
     : tileWindows(visible, available.width, available.height, listLayout, session?.layer === "tabs"), [session, available, listLayout, contentLayer, desktopGrid, stacked, overviewLayout]);
-  const desktopRegions = tiles.regions ?? [];
+  const desktopRegions = (tiles.regions ?? []).map(region=>({...region,labelWindowId:visible
+    .map((w,i)=>({id:w.id,tile:tiles.tiles[i]})).filter(w=>region.ids.includes(w.id)&&w.tile)
+    .sort((a,b)=>a.tile!.y-b.tile!.y||a.tile!.x-b.tile!.x)[0]?.id}));
   const localSession = session ? {...session, windows: [...new Map([...localWindows, ...spatialWindows].map(w => [w.id,w])).values()]} : undefined;
   const images = usePreviews(localSession, participating && config.thumbnails && (!listLayout || !!panel) && (!!panel || contentLayer || !windowsNative));
   useEffect(()=>{ if ((panel || contentLayer) && session?.selected) document.getElementById("window-"+session.selected)?.scrollIntoView({block:"nearest"}); },[session?.selected,contentLayer,tiles]);
   useEffect(() => setInspected(null), [session?.sessionId, session?.selected]);
-  const layerName = session?.layer === "tabs" ? t("Tabs & sessions", "Tab 与会话") : session?.layer === "desktops" ? t("Desktops", "桌面") : session?.layer === "application" ? t("Application windows", "应用窗口") : t("All windows", "全部窗口");
+  const layerName = session?.layer === "tabs" ? t("Tabs & sessions") : session?.layer === "desktops" ? t("Desktops") : session?.layer === "application" ? t("Application windows") : t("All windows");
   const layerHold = session?.layer === "tabs" ? config.tabsHoldShortcut : session?.layer === "application" ? config.applicationHoldShortcut : session?.layer === "desktops" ? config.desktopsHoldShortcut : config.holdShortcut;
   useEffect(() => {
     if (!session || session.mode === "inactive" || !participating) return;
@@ -1079,13 +983,13 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
       <header className="switcher-header">
         <img src="/beaconhop.svg" alt="" />
         <div className="switcher-heading">
-          <div className="switcher-context">BeaconHop <span>/</span> {panel ? panel.display.name || `${t("Display", "显示器")} ${(session?.overview?.indexOf(panel) ?? 0) + 1}` : isSearch ? layerName : t("Workspace navigation", "工作空间导航")}</div>
+          <div className="switcher-context">BeaconHop <span>/</span> {panel ? panel.display.name || `${t("Display")} ${(session?.overview?.indexOf(panel) ?? 0) + 1}` : isSearch ? layerName : t("Workspace navigation")}</div>
           {isSearch ? (
             <input
               ref={input}
-              aria-label={contentLayer ? t("Search targets", "搜索目标") : t("Search windows", "搜索窗口")}
+              aria-label={contentLayer ? t("Search targets") : t("Search windows")}
               disabled={session?.loading}
-              placeholder={t("Title, app or Chinese pinyin / initials", "搜索标题、应用名、拼音或首字母") }
+              placeholder={t("Search windows…") }
               value={query}
               onCompositionStart={() => {
                 composing.current = true;
@@ -1110,34 +1014,25 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
           ) : (
             <>
               <h1>{layerName}</h1>
-              <p>
-                {t("Type a hint to go there", "按下提示字符，直接抵达")}
-                {session?.prefix && (
-                  <>
-                    {" "}
-                    · <strong>{session.prefix}</strong>
-                  </>
-                )}
-              </p>
+              {session?.prefix && <kbd>{session.prefix}</kbd>}
             </>
           )}
         </div>
-        <span className="count">
-          {visible.length} {contentLayer ? t("targets", "个目标") : t("windows", "个窗口")}
-        </span>
+        {panel && <button className="icon-button" title={t("Original stack")} aria-label={t("Original stack")} aria-pressed={stacked} onClick={()=>setStacked(v=>!v)}><Icon name="layers" /></button>}
+        <span className="count">{visible.length}</span>
         <button
           className="icon-button"
-          aria-label={t("Close", "关闭")}
+          aria-label={t("Close")}
           onClick={() => action("cancel")}
         >
           <Icon name="close" size={18} />
         </button>
       </header>
-      {panel && (session?.overview?.length ?? 0) > 1 && <div className="display-route" aria-label={t("Display navigation order", "跨屏导航顺序")}>
+      {panel && (session?.overview?.length ?? 0) > 1 && <div className="display-route sr-only" aria-label={t("Display navigation order")}>
         {session!.overview!.map((p, i) => <span key={p.display.id} className={p === selectedPanel ? "display-route-selected" : ""} aria-current={p === selectedPanel ? "true" : undefined}>
-          {i > 0 && <span aria-hidden="true"> → </span>}{p === panel ? "● " : ""}{p.display.name || `${t("Display", "显示器")} ${i + 1}`}
+          {i > 0 && <span aria-hidden="true"> → </span>}{p === panel ? "● " : ""}{p.display.name || `${t("Display")} ${i + 1}`}
         </span>)}
-        <span className="display-route-target" role="status">{selectedPanel && selectedPanel !== panel ? t("Selected on ", "当前选中：") + (selectedPanel.display.name || selectedPanel.display.id) : ""}</span>
+        <span className="display-route-target" role="status">{selectedPanel && selectedPanel !== panel ? t("Selected on ") + (selectedPanel.display.name || selectedPanel.display.id) : ""}</span>
       </div>}
       {(error || session?.error) && (
         <div className="switcher-error" role="alert">
@@ -1145,17 +1040,14 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
         </div>
       )}
       {!isSearch && visible.some(w => !w.hint) && <div className="switcher-warning">
-        {t("Hint combinations are exhausted. Use arrows, search or click for windows without a hint, or add characters in Settings.", "Hint 组合已用完。无 Hint 的窗口可用方向键、搜索或点击选择，也可在设置中增加字符。")}
+        {t("No hint? Use arrows, search or click.")}
       </div>}
       {session?.warnings.map((w) => (
         <div className="switcher-warning" key={w}>
           {w}
         </div>
       ))}
-      {panel && <div className="spatial-toolbar">
-        <span>{desktopRegions.length > 1 ? t("Shared layout · relative desktop positions · ", "融合布局 · 保留桌面相对位置 · ") : ""}{stacked ? t("Actual positions & front-to-back order", "真实位置与前后遮挡") : t("Expanded previews · positions adjusted to avoid overlap", "展开预览 · 位置经避让调整")}</span>
-        <button className="spatial-toggle" title={t("Restore desktop positions, sizes and occlusion", "还原桌面位置、大小与遮挡")} aria-pressed={stacked} onClick={()=>setStacked(v=>!v)}>{t("Original stack", "原始堆叠")}</button>
-      </div>}
+
       <div className={panel ? "overview-workspace" : "switcher-workspace"}>
       <div
         className="window-list"
@@ -1170,11 +1062,8 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
           data-desktop-id={region.desktop.id} aria-hidden="true"
           style={{left:region.x+14,top:region.y+14,width:region.width,height:region.height,
             "--desktop-color":`hsl(${[258,186,34,330,115,215][index%6]} 65% 65%)`} as CSSProperties} />)}
-        {desktopRegions.map(region => <div className={"desktop-anchor " + (region.desktop.current ? "current-desktop" : "")} key={region.desktop.id}
-          data-desktop-id={region.desktop.id} style={{left:region.centerX+14,top:region.y+18,maxWidth:Math.max(1,region.width-16)}}>
-          <div className="desktop-anchor-title"><strong>{region.desktop.id === "__unknown" ? t("Unknown desktop", "桌面归属未知") : region.desktop.label && zh ? `${region.desktop.label.fullScreen ? "全屏空间" : "桌面"} ${region.desktop.label.number}` : region.desktop.name}</strong>
-            <span>{region.desktop.current ? t("Current · ", "当前 · ") : ""}{region.ids.length}</span></div>
-        </div>)}
+        {desktopRegions.filter(region=>!region.labelWindowId).map(region=><DesktopMarker key={region.desktop.id}
+          region={region} zh={zh} style={{left:region.centerX+14,top:region.y+18,maxWidth:Math.max(1,region.width-16)}} />)}
         {panel && !stacked && <WindowSpatialOverview windows={localWindows}
           highlighted={inspected ?? session?.selected ?? null} width={available.width} height={available.height}
           tile={tiles.tiles[visible.findIndex(w=>w.id===(inspected ?? session?.selected))]}
@@ -1186,6 +1075,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
             image={images[w.id] ?? null}
             desktopPreview={desktopGrid ? session?.desktopPreviews?.[w.id] : undefined}
             desktopImages={images}
+            desktop={desktopRegions.find(region=>region.labelWindowId===w.id)}
             tile={tiles.tiles[index]}
             depth={panel ? (session?.spatialIds?.includes(w.id) ? session.spatialIds.length - session.spatialIds.indexOf(w.id) : 1) : undefined}
             nativeStack={session?.spatialIds?.includes(w.id)}
@@ -1207,17 +1097,14 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
           <div className="empty">
             <span className="empty-icon"><Icon name="search" size={30} /></span>
             <h2>
-              {session?.loading ? t("Loading targets…", "正在读取目标…") : query
-                ? (contentLayer ? t("No matching targets", "没有匹配的目标") : t("No matching windows", "没有匹配的窗口"))
-                : (contentLayer ? t("No targets in this window", "当前窗口没有可切换目标") : t("Nothing in view yet", "暂时没有窗口"))}
+              {session?.loading ? t("Loading targets…") : query
+                ? (contentLayer ? t("No matching targets") : t("No matching windows"))
+                : (contentLayer ? t("No targets in this window") : t("Nothing in view yet"))}
             </h2>
             <p>
-              {session?.loading ? t("Esc cancels", "按 Esc 取消") : contentLayer ? t("Check the plugin connection or try another search.", "检查插件连接，或换个搜索词。") : query
-                ? t("Try another title or app name.", "试试其他标题或应用名。")
-                : t(
-                    "Open a window, or check your scope and Accessibility settings.",
-                    "打开一个窗口，或检查范围设置与辅助功能权限。",
-                  )}
+              {session?.loading ? t("Esc cancels") : contentLayer ? t("Check the plugin connection or try another search.") : query
+                ? t("Try another title or app name.")
+                : t("Open a window, or check your scope and Accessibility settings.")}
             </p>
           </div>
         )}
@@ -1230,40 +1117,49 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
         </span>
         <div>
           <span>
-            <kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> {t("navigate", "选择")}
+            <kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> {t("navigate")}
           </span>
           {isSearch ? (
             <>
               <span>
-                <kbd>↵</kbd> {t("hop", "跳转")}
+                <kbd>↵</kbd> {t("hop")}
               </span>
             </>
           ) : (
             <>
               <span title={shortcut(layerHold)}>
-                <kbd>{shortcut(layerHold.split("+").at(-1)!)}</kbd> {t("next", "正向")}
+                <kbd>{shortcut(layerHold.split("+").at(-1)!)}</kbd> {t("next")}
               </span>
               <span title={shortcut(reverseShortcut(layerHold))}>
-                <kbd>Shift + {shortcut(layerHold.split("+").at(-1)!)}</kbd> {t("previous", "反向")}
+                <kbd>Shift + {shortcut(layerHold.split("+").at(-1)!)}</kbd> {t("previous")}
               </span>
               <span>
-                <kbd>{shortcut(config.searchEntryKey)}</kbd> {t("search", "搜索")}
+                <kbd>{shortcut(config.searchEntryKey)}</kbd> {t("search")}
               </span>
             </>
           )}
           <span>
-            <kbd>Esc</kbd> {t("cancel & return", "取消并返回")}
+            <kbd>Esc</kbd> {t("cancel & return")}
           </span>
         </div>
       </footer>
     </div>
   );
 }
+function DesktopMarker({region,zh,style}:{region:DesktopAnchor;zh:boolean;style?:CSSProperties}) {
+  const desktop=region.desktop;
+  const name=desktop.id==="__unknown" ? translate(zh,"Unknown desktop") : desktop.label && zh
+    ? `${desktop.label.fullScreen ? "全屏空间" : "桌面"} ${desktop.label.number}` : desktop.name;
+  return <span className={"desktop-anchor " + (desktop.current ? "current-desktop" : "")} data-desktop-id={desktop.id} style={style}>
+    <span className="desktop-anchor-title"><strong>{name}</strong>{desktop.current && <span>●</span>}</span>
+  </span>;
+}
 function WindowCard({
   window: w,
   image,
   desktopPreview,
   desktopImages,
+  desktop,
   tile,
   depth,
   nativeStack,
@@ -1282,6 +1178,7 @@ function WindowCard({
   image: string | null;
   desktopPreview?: DesktopPreview;
   desktopImages: Record<string, string>;
+  desktop?:DesktopAnchor;
   tile?: Tile;
   depth?: number;
   nativeStack?: boolean;
@@ -1298,7 +1195,7 @@ function WindowCard({
 }) {
   const title = w.desktopTarget && zh && w.desktopLabel
     ? `${w.desktopLabel.fullScreen ? "全屏空间" : "桌面"} ${w.desktopLabel.number}` : w.title;
-  const appName = w.desktopTarget ? (zh ? "桌面" : "Desktop") : w.appName;
+  const appName = w.desktopTarget ? (translate(zh, "Desktop")) : w.appName;
   const previewArea = useRef<HTMLDivElement>(null);
   const element = useRef<HTMLButtonElement>(null);
   const previousTile = useRef<Tile>();
@@ -1381,7 +1278,7 @@ function WindowCard({
       onMouseLeave={() => onInspect?.(null)}
       title={[appName, title, w.content?.subtitle, w.content?.description].filter(Boolean).join(" — ")}
     >
-      {depth !== undefined && <span className="spatial-depth" title={nativeStack ? (zh ? "原始堆叠层级，数字越大越靠前" : "Original stack order: higher numbers are nearer the front") : undefined} aria-hidden="true">{w.minimized ? (zh ? "最小化" : "Minimized") : w.hidden ? (zh ? "已隐藏" : "Hidden") : !nativeStack ? (zh ? "其他桌面" : "Other desktop") : `${zh ? "层" : "Layer "}${depth}`}</span>}
+
       <div className="preview-frame">
         {windowsNative && !w.content && thumbnails && (
           <div className="native-preview-area" ref={previewArea} />
@@ -1395,20 +1292,17 @@ function WindowCard({
             ) : (
               <span>{appName.slice(0, 1)}</span>
             )}
-            <small>{w.content ? (zh ? "暂无预览" : "No preview") : appName}</small>
+            <small>{w.content ? (translate(zh, "No preview")) : appName}</small>
           </div>
         )}
-        {!search && w.hint && <kbd className="window-hint hint-badge" style={hintVariables(hintStyle)}
-          data-state-label={depth === undefined ? undefined : selected && departure ? (zh ? "出发 · 选中" : "Origin · Selected") : selected ? (zh ? "选中" : "Selected") : departure ? (zh ? "出发" : "Origin") : undefined}
-        >{w.hint.replaceAll(" ", "␣")}</kbd>}
-        {depth !== undefined && (search || !w.hint) && (selected || departure) && <span className="window-focus-marker hint-badge" style={hintVariables(hintStyle)}
-          data-state-label={selected && departure ? (zh ? "出发 · 选中" : "Origin · Selected") : selected ? (zh ? "选中" : "Selected") : (zh ? "出发" : "Origin")}
-          aria-hidden="true">{selected ? "↵" : "●"}</span>}
+        {!search && w.hint && <kbd className="window-hint hint-badge" style={hintVariables(hintStyle)}>{w.hint.replaceAll(" ", "␣")}</kbd>}
+        {depth !== undefined && (search || !w.hint) && (selected || departure) && <span className="window-focus-marker hint-badge" style={hintVariables(hintStyle)} aria-hidden="true">{selected ? "↵" : "●"}</span>}
         {w.minimized && (
-          <span className="window-state">{zh ? "最小化" : "Minimized"}</span>
+          <span className="window-state">{"−"}</span>
         )}
       </div>
       <div className="window-meta">
+        {desktop && <DesktopMarker region={desktop} zh={zh} />}
         {w.icon ? (
           <img src={w.icon} alt="" onError={event => { event.currentTarget.style.visibility = "hidden"; }} />
         ) : (
@@ -1417,7 +1311,7 @@ function WindowCard({
         <div>
           <h2>{title}</h2>
           <p>
-            {w.content?.subtitle || (w.desktopTarget && w.currentDesktop ? (zh ? "当前桌面" : "Current desktop") : appName)}
+            {w.content?.subtitle || (w.desktopTarget && w.currentDesktop ? (translate(zh, "Current desktop")) : appName)}
             {!w.content && w.desktopName && (
               <>
                 {" "}
@@ -1428,8 +1322,8 @@ function WindowCard({
           {textContent && w.content?.description && <p className="target-description">{w.content.description}</p>}
         </div>
         {(selected || departure) && <span className="card-state">
-          {departure && <span className="departure-badge">{zh ? "出发窗口" : "Origin"}</span>}
-          {selected && <span className="selection-badge">{zh ? "将切换" : "Selected"}</span>}
+          {departure && <span className="departure-badge sr-only">{translate(zh, "Origin")}</span>}
+          {selected && <span className="selection-badge sr-only">{translate(zh, "Selected")}</span>}
         </span>}
         {selected && <span className="selected-arrow"><Icon name="hop" size={16} /></span>}
       </div>

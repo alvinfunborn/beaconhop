@@ -17,7 +17,7 @@ export function WindowSpatialOverview({windows, highlighted, width, height, tile
   return <div className="spatial-origin" aria-hidden="true">
     <svg width={width} height={height}><line x1={x+originalWidth/2} y1={y+originalHeight/2} x2={tile.x+tile.width/2} y2={tile.y+tile.height/2}/></svg>
     <div className="spatial-footprint" style={{left:x,top:y,width:originalWidth,height:originalHeight}}>
-      <span>{zh ? "原位置" : "Original position"} · {target.appName}</span>
+      <span>{target.appName}</span>
     </div>
   </div>;
 }

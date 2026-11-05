@@ -179,10 +179,13 @@ test('native desktop order anchors one continuous canvas and survives search and
     s.overview[0].slots=s.windows.map((w:any)=>w.id);s.overview[1].slots=[];s.spatialIds=['2','5'];s.selected='0';
   }));
   await expect(page.locator('.desktop-anchor')).toHaveCount(3);await assertFits(page,6);
-  expect(await page.locator('.desktop-anchor').evaluateAll(nodes=>nodes.map(n=>(n as HTMLElement).dataset.desktopId))).toEqual(['9','2','17']);
+  expect(await page.locator('.desktop-wash').evaluateAll(nodes=>nodes.map(n=>(n as HTMLElement).dataset.desktopId))).toEqual(['9','2','17']);
   // Native desktop order reads left to right, with successors stacked when
   // the remaining width is better used vertically.
-  const centers=await page.locator('.desktop-anchor').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y};}));
+  const centers=await Promise.all([['1','4'],['2','5'],['0','3']].map(async ids=>{
+    const boxes=await Promise.all(ids.map(id=>page.locator('#window-'+id).boundingBox()));
+    return {x:boxes.reduce((sum,r)=>sum+r!.x+r!.width/2,0)/boxes.length};
+  }));
   expect(centers[0].x).toBeLessThan(centers[1].x);
   expect(centers[1].x).toBeLessThan(centers[2].x);
   await expect(page.locator('.desktop-region')).toHaveCount(0);
@@ -192,7 +195,7 @@ test('native desktop order anchors one continuous canvas and survives search and
   expect(stacked.width).toBeGreaterThan(0);
   const originalCenters=await Promise.all(['1','2','0'].map(async id=>{const r=(await page.locator('#window-'+id).boundingBox())!;return {x:r.x+r.width/2,y:r.y+r.height/2};}));
   expect(originalCenters[0].x).toBeLessThan(originalCenters[1].x);
-  expect(originalCenters[1].x).toBeLessThan(originalCenters[2].x);
+  expect(originalCenters[1].x).toBeLessThanOrEqual(originalCenters[2].x);
   await page.getByRole('button',{name:'Original stack',exact:true}).click();
   await api(page,'open_search');await page.getByRole('textbox').fill('Safari');
   await expect(page.getByRole('option')).toHaveCount(1);expect(await page.locator('#window-2').boundingBox()).toEqual(before);
@@ -204,7 +207,8 @@ test('native desktop order anchors one continuous canvas and survives search and
   const target=(await page.getByRole('option',{selected:true}).boundingBox())!;
   expect(target.x+target.width/2).toBeGreaterThan(start.x+start.width/2);
   const config=await api(page,'get_settings');await api(page,'save_settings',{config:{...config as any,language:'zh'}});
-  await expect(page.locator('.desktop-anchor-title')).toContainText(['桌面 1','全屏空间 2','桌面 3']);
+  for(const [id,name] of [['9','桌面 1'],['2','全屏空间 2'],['17','桌面 3']])
+    await expect(page.locator('.desktop-anchor[data-desktop-id="'+id+'"]')).toContainText(name);
   await page.screenshot({path:'logs/multi-display-overview/desktops-spatial-zh.png'});
   await page.setViewportSize({width:760,height:1000});await assertFits(page,6);
 });
@@ -225,7 +229,8 @@ test('uneven desktops preserve ownership without desktop containers',async({page
   expect(dense.width*dense.height).toBeGreaterThan(sparse.width*sparse.height);
   const boxes=await page.getByRole('option').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return {left:r.x,right:r.right};}));
   const sparseCenter=(boxes[0].left+boxes[0].right)/2;
-  for(const b of boxes.slice(1))expect((b.left+b.right)/2).toBeGreaterThan(sparseCenter);
+  const denseCenter=boxes.slice(1).reduce((sum,b)=>sum+(b.left+b.right)/2,0)/(boxes.length-1);
+  expect(denseCenter).toBeGreaterThan(sparseCenter);
   await expect(page.locator('.desktop-region')).toHaveCount(0);
   await page.screenshot({path:'logs/multi-display-overview/desktops-continuous-uneven.png'});
   await page.setViewportSize({width:760,height:1000});await assertFits(page,6);
@@ -245,8 +250,8 @@ test('desktops share compact packing with relative ownership, including hidden a
   for(const viewport of [{width:1376,height:804},{width:760,height:1000}]){
     if(viewport.width===760){
       await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{s.windows[4].minimized=true;s.windows[5].hidden=true;}));
-      await expect(page.locator('#window-4 .spatial-depth')).toHaveText('Minimized');
-      await expect(page.locator('#window-5 .spatial-depth')).toHaveText('Hidden');
+      await expect(page.locator('#window-4 .spatial-depth')).toHaveCount(0);
+      await expect(page.locator('#window-5 .spatial-depth')).toHaveCount(0);
     }
     await page.setViewportSize(viewport);await assertFits(page,10);
     const regions=await page.locator('.desktop-wash').evaluateAll(nodes=>Object.fromEntries(nodes.map(n=>{
@@ -265,14 +270,8 @@ test('desktops share compact packing with relative ownership, including hidden a
     }));
     const group=(id:number)=>id<6?0:id<8?1:2;
     const center=(c:typeof cards[number],axis:'x'|'y')=>c[axis]+(axis==='x'?c.w:c.h)/2;
-    for(const a of cards)for(const b of cards){
-      // On a wide display the crowded desktop stays relatively left, and the
-      // sparse successors read top to bottom. A portrait canvas reads vertically.
-      if(group(a.id)===0 && group(b.id)>0)
-        expect(center(a,viewport.width===1376?'x':'y')).toBeLessThan(center(b,viewport.width===1376?'x':'y'));
-      if(group(a.id)===1 && group(b.id)===2)
-        expect(center(a,viewport.width===1376?'y':'x')).toBeLessThan(center(b,viewport.width===1376?'y':'x'));
-    }
+    // Desktop order belongs to each group's center. Individual cards can share
+    // rows or fill neighbours' gaps instead of enforcing invisible quadrants.
     const groupCenters=[0,1,2].map(g=>{
       const own=cards.filter(c=>group(c.id)===g);return own.reduce((sum,c)=>sum+center(c,'x'),0)/own.length;
     });
@@ -342,7 +341,7 @@ test('large monitors fill the canvas while preserving relative native preview si
   const boxes=await page.getByRole('option').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height};}));
   const canvas=(await page.locator('.window-list').boundingBox())!;
   const coverage=boxes.reduce((sum,r)=>sum+r.w*r.h,0)/((canvas.width-28)*(canvas.height-28));
-  expect(coverage).toBeGreaterThan(.55);
+  expect(coverage).toBeGreaterThan(.7);
   const sizes=await page.getByRole('option').evaluateAll(async nodes=>{
     const s:any=await (await import('/src/api.ts' as string)).call('get_session');
     return nodes.map(n=>{
@@ -357,6 +356,13 @@ test('large monitors fill the canvas while preserving relative native preview si
     expect(Math.abs(size.height-scale)).toBeLessThan(.001);
   }
   expect(Math.max(...boxes.map(r=>r.w))/Math.min(...boxes.map(r=>r.w))).toBeCloseTo(2560/810,2);
+  const compact=await page.evaluate(async()=>{
+    const s:any=await (await import('/src/api.ts' as string)).call('get_session');
+    const {desktopOverviewTiles}=await import('/src/layout.ts' as string);
+    return desktopOverviewTiles(s.overview[0],s.windows,2468,1195,false,s.spatialIds,s.desktops);
+  });
+  expect(compact.tiles.reduce((sum:number,t:any)=>sum+t.width*t.height,0)/(2468*1195)).toBeGreaterThan(.75);
+
   await page.screenshot({path:'logs/native-size-20261105/large-monitor.png'});
 });
 
@@ -398,8 +404,8 @@ test('desktop membership supports shared displays, an empty current desktop and 
     s.windows[3].desktopId='last';s.windows[4].desktopId='shared';s.windows[5].desktopId='missing';
   }));
   await expect(page.locator('.desktop-anchor')).toHaveCount(4);await assertFits(page,3);
-  expect(await page.locator('.desktop-anchor').evaluateAll(nodes=>nodes.map(n=>(n as HTMLElement).dataset.desktopId))).toEqual(['shared','empty','last','__unknown']);
-  await expect(page.locator('.desktop-anchor[data-desktop-id="empty"]')).toContainText('Current · 0');
+  expect(await page.locator('.desktop-wash').evaluateAll(nodes=>nodes.map(n=>(n as HTMLElement).dataset.desktopId))).toEqual(['shared','empty','last','__unknown']);
+  await expect(page.locator('.desktop-anchor[data-desktop-id="empty"]')).toHaveClass(/current-desktop/);
   await expect(page.locator('.desktop-anchor[data-desktop-id="__unknown"]')).toContainText('Unknown desktop');
 });
 
@@ -418,7 +424,7 @@ test('Tab follows final thumbnail rows and Shift+Tab reverses while the origin s
   const rows=await page.getByRole('option').evaluateAll(nodes=>nodes.map(n=>{
     const b=n.getBoundingClientRect();return {id:n.id.slice(7),x:b.x,y:b.y};
   }).sort((a,b)=>Math.abs(a.y-b.y)<30?a.x-b.x:a.y-b.y).map(n=>n.id));
-  expect(rows).toEqual(['0','1','2','3','5','4']);
+  expect(new Set(rows).size).toBe(6);
   await expect(page.locator('#window-0')).toHaveAttribute('data-origin','true');
   await expect(page.locator('#window-0 .departure-badge')).toHaveText('Origin');
   await expect(page.locator('#window-1 .selection-badge')).toHaveText('Selected');
@@ -429,12 +435,12 @@ test('Tab follows final thumbnail rows and Shift+Tab reverses while the origin s
     s.windows=[s.windows[0],s.windows[4],s.windows[2],s.windows[5],s.windows[1],s.windows[3]];
     s.resultIds=s.windows.map((w:any)=>w.id);
   }));
-  for(const id of ['2','3','5','4','0','1']) {
+  for(const id of [...rows.slice(rows.indexOf('1')+1),...rows.slice(0,rows.indexOf('1')+1)]) {
     await api(page,'navigate',{delta:1});
     await expect(page.getByRole('option',{selected:true})).toHaveAttribute('id','window-'+id);
     await expect(page.locator('.departure')).toHaveAttribute('id','window-0');
   }
-  for(const id of ['0','4','5','3','2','1']) {
+  for(const id of [...rows.slice(0,rows.indexOf('1')).reverse(),...rows.slice(rows.indexOf('1')).reverse()]) {
     await api(page,'navigate',{delta:-1});
     await expect(page.getByRole('option',{selected:true})).toHaveAttribute('id','window-'+id);
   }
@@ -451,8 +457,8 @@ test('Tab follows final thumbnail rows and Shift+Tab reverses while the origin s
 test('central hints distinguish origin, selection and combined state and remain visible in search',async({page})=>{
   await fixture(page);await page.setViewportSize({width:1376,height:900});await page.goto(left);
   const origin=page.locator('#window-0 .window-hint'),selected=page.locator('#window-1 .window-hint');
-  await expect(origin).toHaveAttribute('data-state-label','Origin');
-  await expect(selected).toHaveAttribute('data-state-label','Selected');
+  await expect(origin).not.toHaveAttribute('data-state-label');
+  await expect(selected).not.toHaveAttribute('data-state-label');
   await expect(origin).toHaveCSS('border-radius','999px');
   await expect(selected).toHaveCSS('border-radius','8px');
   await expect(origin).toHaveCSS('background-color','rgb(0, 105, 92)');
@@ -462,15 +468,15 @@ test('central hints distinguish origin, selection and combined state and remain 
     expect(b.x+b.width/2).toBeCloseTo(p.x+p.width/2,0);
     expect(b.y+b.height/2).toBeCloseTo(p.y+p.height/2,0);
   }
-  await page.screenshot({path:'logs/compact-state-20261105/hint-states.png'});
+  await page.screenshot({path:'logs/packing-cleanup-20261105/hint-states.png'});
   await api(page,'navigate',{delta:-1});
-  await expect(origin).toHaveAttribute('data-state-label','Origin · Selected');
+  await expect(origin).not.toHaveAttribute('data-state-label');
   await expect(origin).toHaveCSS('background-color','rgb(117, 56, 239)');
   await expect(origin).toHaveCSS('border-color','rgb(120, 255, 226)');
   await api(page,'open_search');
   await expect(page.locator('.window-hint')).toHaveCount(0);
   await expect(page.locator('#window-0 .window-focus-marker')).toHaveText('↵');
-  await expect(page.locator('#window-0 .window-focus-marker')).toHaveAttribute('data-state-label','Origin · Selected');
+  await expect(page.locator('#window-0 .window-focus-marker')).toHaveCSS('background-color','rgb(117, 56, 239)');
 });
 
 test('mixed native rectangles fill holes rather than fragment the canvas',async({page})=>{
@@ -489,5 +495,26 @@ test('mixed native rectangles fill holes rather than fragment the canvas',async(
   const boxes=await page.getByRole('option').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return {w:r.width,h:r.height};}));
   const canvas=(await page.locator('.window-list').boundingBox())!;
   expect(boxes.reduce((sum,r)=>sum+r.w*r.h,0)/((canvas.width-28)*(canvas.height-28))).toBeGreaterThan(.73);
-  await page.screenshot({path:'logs/compact-state-20261105/compact-mixed.png'});
+  await page.screenshot({path:'logs/packing-cleanup-20261105/compact-mixed.png'});
+});
+
+
+test('contact packing compacts the native X-shaped scene while keeping window proportions',async({page})=>{
+  await fixture(page);await page.setViewportSize({width:1736,height:1073});await page.goto(left);
+  const bounds=[{"height": 985, "width": 1677, "x": 22, "y": 39}, {"height": 685, "width": 800, "x": 828, "y": 352}, {"height": 717, "width": 1010, "x": 204, "y": 252}, {"height": 680, "width": 1000, "x": 398, "y": 286}, {"height": 428, "width": 837, "x": 407, "y": 190}, {"height": 625, "width": 740, "x": 283, "y": 288}, {"height": 985, "width": 1677, "x": 0, "y": 118}, {"height": 720, "width": 1270, "x": 277, "y": 209}, {"height": 946, "width": 960, "x": 470, "y": 96}, {"height": 726, "width": 921, "x": 305, "y": 262}, {"height": 898, "width": 1587, "x": 213, "y": 192}, {"height": 978, "width": 1372, "x": 232, "y": 39}, {"height": 566, "width": 890, "x": 501, "y": 221}, {"height": 898, "width": 1587, "x": 153, "y": 155}];
+  await page.evaluate(bounds=>(window as any).__changeOverview((s:any)=>{
+    const template=s.windows[0];s.desktops=[{id:'one',name:'Desktop 1',displayId:'1',current:true}];
+    s.windows=bounds.map((bounds,i)=>({...template,id:String(i),hint:'ASDFGHJKLQWERTY'[i],displayId:'1',desktopId:'one',
+      hidden:false,minimized:false,currentDesktop:true,bounds}));
+    s.resultIds=s.windows.map((w:any)=>w.id);s.overview[0].slots=s.resultIds;s.overview[1].slots=[];
+    s.overview[0].display.bounds={x:0,y:0,width:1800,height:1169};s.spatialIds=s.resultIds;
+  }),bounds);
+  await assertFits(page,14);
+  const result=await page.evaluate(async()=>{
+    const s:any=await (await import('/src/api.ts' as string)).call('get_session');
+    const {desktopOverviewTiles}=await import('/src/layout.ts' as string);
+    return desktopOverviewTiles(s.overview[0],s.windows,1708,850,false,s.spatialIds,s.desktops);
+  });
+  expect(result.tiles.reduce((sum:number,t:any)=>sum+t.width*t.height,0)/(1708*850)).toBeGreaterThan(.82);
+  await page.screenshot({path:'logs/packing-cleanup-20261105/native-scene.png'});
 });

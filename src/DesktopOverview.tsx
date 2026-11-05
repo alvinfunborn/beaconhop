@@ -1,3 +1,4 @@
+import { translate } from "./copy";
 import type { CSSProperties } from "react";
 import type { DesktopPreview, Destination } from "./types";
 
@@ -19,7 +20,7 @@ export function DesktopOverview({preview, images, zh}: {
   const bounds = {x, y, width: Math.max(...displays.map(d => d.bounds.x + d.bounds.width)) - x,
     height: Math.max(...displays.map(d => d.bounds.y + d.bounds.height)) - y};
   const windows = preview.windows.filter(w => valid(w.bounds) && displays.some(d => overlaps(w.bounds, d.bounds)));
-  return <div className="desktop-overview" role="img" aria-label={zh ? "桌面窗口总览" : "Desktop window overview"}>
+  return <div className="desktop-overview" role="img" aria-label={translate(zh, "Desktop window overview")}>
     {displays.length > 0 && <div className="desktop-canvas" style={{aspectRatio: `${bounds.width} / ${bounds.height}`, width: `min(100cqw, calc(100cqh * ${bounds.width / bounds.height}))`}}>
       {displays.map(display => <div className="desktop-display" key={display.id} style={position(display.bounds, bounds)}>
         {[...windows].reverse().filter(w => overlaps(w.bounds, display.bounds)).map(w =>
@@ -28,6 +29,6 @@ export function DesktopOverview({preview, images, zh}: {
           </div>)}
       </div>)}
     </div>}
-    {!windows.length && <span className="desktop-empty">{displays.length ? (zh ? "无可见窗口" : "No visible windows") : (zh ? "总览暂不可用" : "Overview unavailable")}</span>}
+    {!windows.length && <span className="desktop-empty">{displays.length ? (translate(zh, "No visible windows")) : (translate(zh, "Overview unavailable"))}</span>}
   </div>;
 }

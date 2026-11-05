@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 const setup=async(page:any,fixture='')=>{
   await page.goto('/?preview=1'+(fixture?'&plugins='+fixture:''));
-  await page.getByRole('button',{name:'Set up plugins',exact:true}).click();
+  await page.getByRole('button',{name:'Application plugins',exact:true}).click();
 };
 test('new users can reach setup; unpublished Edge is not presented as installable',async({page})=>{
   await setup(page);

@@ -954,7 +954,7 @@ textarea {
 .display-route-selected { color: var(--accent); font-weight: 600; }
 .display-route-target { margin-left: auto; }
 .display-overview .switcher-footer > div { flex-wrap: wrap; justify-content: flex-end; }
-.display-overview .switcher-header { height: 106px; min-height: 106px; }
+.display-overview .switcher-header { height: 68px; min-height: 68px; }
 .switcher-workspace { display: flex; flex: 1; min-height: 0; }
 .overview-workspace { display: flex; flex: 1; min-height: 0; }
 .overview-workspace > .window-list { flex: 1; overflow: hidden; isolation: isolate; background: radial-gradient(ellipse at 50% 40%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 75%); }
@@ -1050,7 +1050,8 @@ textarea {
 .continuation-selected, .continuation-add { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
 .continuation-add select { min-width: 0; max-width: 170px; }
 
-.desktop-anchor { position:absolute; pointer-events:none; z-index:0; transform:translateX(-50%); color:var(--muted); }
+.desktop-anchor { position:absolute; pointer-events:none; z-index:3; transform:translateX(-50%); color:var(--text); padding:2px 6px; border-radius:4px; background:color-mix(in srgb, var(--panel) 88%, transparent); }
+.window-meta .desktop-anchor { position:static; transform:none; flex-shrink:0; max-width:40%; }
 .desktop-anchor.current-desktop { color:var(--accent); }
 .desktop-anchor-title { display:flex; align-items:center; gap:6px; font-size:11px; }
 .desktop-anchor-title strong { font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -1094,12 +1095,6 @@ textarea {
   border-radius:8px;
 }
 .spatial-card.selected.departure :is(.window-hint,.window-focus-marker) { --marker-ring:#78ffe2; }
-.spatial-card :is(.window-hint,.window-focus-marker)[data-state-label]::after {
-  content:attr(data-state-label); position:absolute; top:calc(100% + 9px); left:50%; transform:translateX(-50%);
-  padding:3px 7px; border-radius:5px; border:1px solid var(--marker-ring);
-  background:var(--marker-fill); color:#fff; font:750 10px/1.2 system-ui,sans-serif; white-space:nowrap;
-  box-shadow:0 3px 10px #0009;
-}
 
 .desktop-wash {
   position: absolute;
@@ -1107,3 +1102,10 @@ textarea {
   z-index: 0;
   background: radial-gradient(ellipse at center, color-mix(in srgb, var(--desktop-color) 19%, transparent), color-mix(in srgb, var(--desktop-color) 10%, transparent) 45%, transparent 75%);
 }
+
+/* Keep controls named for assistive technology without duplicating the canvas. */
+.sr-only { position:absolute !important; width:1px !important; height:1px !important; padding:0 !important; margin:-1px !important; overflow:hidden !important; clip-path:inset(50%) !important; white-space:nowrap !important; border:0 !important; }
+.display-overview .switcher-header { padding:12px 18px; gap:12px; }
+.display-overview .switcher-header > img { width:28px; height:28px; }
+.display-overview .switcher-heading h1 { font-size:16px; margin:0; }
+.display-overview .switcher-context { font-size:11px; }
