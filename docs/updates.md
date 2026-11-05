@@ -40,7 +40,7 @@ npm run tauri -- signer sign --private-key-path /protected/path/updater.key /pat
 
 ## Release channel
 
-The default endpoint is `https://github.com/alvinfunborn/beaconhop/releases/latest/download/latest.json`. The source repository is currently private and no release has been published. Ordinary installations cannot read private GitHub release assets; no access token is embedded in the application. The UI reports that no public release is available rather than reporting that the installation is current.
+The default endpoint is `https://github.com/alvinfunborn/beaconhop/releases/latest/download/latest.json`. The source repository is currently private. Releases are available to repository members; v0.3.0 was published on 2026-11-03. Ordinary installations cannot read private GitHub release assets; no access token is embedded in the application. The UI reports that no public release is available rather than reporting that the installation is current.
 
 Before public distribution, choose either a public source repository or a separate public packages repository. To use a separate repository:
 
@@ -57,7 +57,7 @@ No repository visibility changes or release publication happen automatically.
 
 The workflow builds macOS Apple Silicon and Windows x64 packages, collects both signed packages, and generates `latest.json` plus SHA-256 checksums. It refuses to create an incomplete two-platform manifest or a prerelease manifest. Intel Mac packages are not advertised.
 
-Only an explicit run with `publish=true` creates a release. The release must contain the manifest and the exact filenames referenced by it:
+Only an explicit run with `publish=true` creates a release through this workflow. Private repository releases may also use a build-only run followed by verified asset upload and explicit publication, as for v0.3.0. The official Edge store gate applies to public distribution; private releases retain the unavailable store-install state and document developer extension setup. The release must contain the manifest and the exact filenames referenced by it:
 
 - `beaconhop-macos-arm64.app.tar.gz` and its `.sig`
 - `beaconhop-windows-setup.exe` and its `.sig`
