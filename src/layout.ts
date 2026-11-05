@@ -12,30 +12,30 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
   const screen = panel.display.bounds;
   const scale = Math.min(width / screen.width, height / screen.height);
   const ox = (width - screen.width * scale) / 2, oy = (height - screen.height * scale) / 2;
+  const caption = guides.length ? Math.min(32,height*.12) : 0;
   const anchors = windows.map((w, i) => {
     const visible = spatialIds.includes(w.id);
     const x = guides[i]?.x ?? (visible ? ox + (w.bounds.x - screen.x + w.bounds.width / 2) * scale : width * (i + 1) / (windows.length + 1));
     const y = guides[i]?.y ?? (visible ? oy + (w.bounds.y - screen.y + w.bounds.height / 2) * scale : height * .9);
     const aspect = Math.max(.5, Math.min(2.5, w.bounds.width / Math.max(1, w.bounds.height)));
-    // A tiny native utility window still needs a useful preview. Keep native
-    // proportions in the footprint, while narrowing the size range of cards.
-    const reference = Math.sqrt(width*height/windows.length*aspect);
-    const w0 = guides.length ? Math.min(width*.8,Math.max(reference*.85,Math.min(reference*1.2,w.bounds.width*scale)))
-      : Math.min(width * .8, Math.max(220, w.bounds.width * scale));
+    // One common scale preserves both native dimensions across every desktop
+    // on this display. Captions sit outside the proportionate preview.
+    if(guides.length)return {x,y,width:Math.max(1,w.bounds.width)*scale,height:Math.max(1,w.bounds.height)*scale};
+    const w0 = Math.min(width * .8, Math.max(220, w.bounds.width * scale));
     return {x, y, width: w0, height: w0 / aspect + 32};
   });
-  const tile = (x: number, y: number, w: number, h: number): Tile => ({x,y,width:w,height:h,meta:Math.min(32,h*.23),preview:h-Math.min(32,h*.23)});
+  const tile = (x: number, y: number, w: number, h: number, meta=Math.min(32,h*.23)): Tile => ({x,y,width:w,height:h,meta,preview:h-meta});
   const originals = windows.map((w,i) => guides[i]
     ? tile(guides[i].origin.x,guides[i].origin.y,guides[i].origin.width,guides[i].origin.height)
     : spatialIds.includes(w.id) ? tile(ox+(w.bounds.x-screen.x)*scale,oy+(w.bounds.y-screen.y)*scale,w.bounds.width*scale,w.bounds.height*scale)
     : tile(Math.max(0,Math.min(width-Math.min(120,width),anchors[i].x-60)),Math.max(0,height-80),Math.min(120,width),Math.min(76,height)));
   if (stacked) return {columns: 1, tiles: originals};
   let order:number[]=[];
-  function pack(shrink:number) {
+  function pack(shrink:number,strategy:string) {
     const placed: {x:number;y:number;width:number;height:number;index:number}[]=[];
     let free:Area[]=[{x:0,y:0,width,height}];
     for(const index of order) {
-      const a=anchors[index],w=a.width*shrink,h=a.height*shrink,gap=12;
+      const a=anchors[index],w=a.width*shrink,h=a.height*shrink+caption,gap=guides.length ? 8 : 12;
       if(w>width||h>height)return null;
       const clamp=(x:number,y:number)=>({x:Math.max(0,Math.min(width-w,x)),y:Math.max(0,Math.min(height-h,y))});
       const guide=guides[index];
@@ -75,6 +75,10 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
         }
       }
       let best: {x:number;y:number}|null=null,score=Infinity;
+      const extent=placed.length ? {
+        left:Math.min(...placed.map(p=>p.x)),top:Math.min(...placed.map(p=>p.y)),
+        right:Math.max(...placed.map(p=>p.x+p.width)),bottom:Math.max(...placed.map(p=>p.y+p.height)),
+      } : undefined;
       for(const c of candidates) {
         if(placed.some(p=>c.x < p.x+p.width+gap-.1 && c.x+w+gap-.1 > p.x && c.y < p.y+p.height+gap-.1 && c.y+h+gap-.1 > p.y))continue;
         const home=guides[index]?.home,cx=c.x+w/2,cy=c.y+h/2;
@@ -91,7 +95,10 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
         }))continue;
         if(cx<minCenterX-.1)continue;
         const distance=((cx-a.x)/width)**2+((cy-a.y)/height)**2;
-        if(distance<score){best=c;score=distance;}
+        const footprint=extent ? (Math.max(extent.right,c.x+w)-Math.min(extent.left,c.x))
+          *(Math.max(extent.bottom,c.y+h)-Math.min(extent.top,c.y))/(width*height) : 0;
+        const cost=strategy.startsWith('compact') ? footprint+distance*.25 : distance;
+        if(cost<score){best=c;score=cost;}
       }
       if(!best)return null;
       placed.push({...best,width:w,height:h,index});
@@ -111,17 +118,17 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
           && (j<i||b.width*b.height>f.width*f.height)));
       }
     }
-    return placed.sort((a,b)=>a.index-b.index).map(n=>tile(n.x,n.y,n.width,n.height));
+    return placed.sort((a,b)=>a.index-b.index).map(n=>tile(n.x,n.y,n.width,n.height,guides.length ? caption : undefined));
   }
   let best:Tile[]=[],largest=0;
-  const strategies=guides.length ? ['area','x','y','small'] : ['area'];
+  const strategies=guides.length ? ['area','x','y','small','compact','compact-small'] : ['area'];
   for(const strategy of strategies){
     order=anchors.map((_,i)=>i).sort((a,b)=>(guides[a]?.rank ?? 0)-(guides[b]?.rank ?? 0)
       || (strategy==='x' ? anchors[a].x-anchors[b].x : strategy==='y' ? anchors[a].y-anchors[b].y
-        : (strategy==='small' ? -1 : 1)*(anchors[b].width*anchors[b].height-anchors[a].width*anchors[a].height)) || a-b);
-    let low=0,high=1,candidate:Tile[]=[];
+        : (strategy.endsWith('small') ? -1 : 1)*(anchors[b].width*anchors[b].height-anchors[a].width*anchors[a].height)) || a-b);
+    let low=0,high=guides.length ? Math.min(...anchors.map(a=>Math.min(width/a.width,(height-caption)/a.height))) : 1,candidate:Tile[]=[];
     for(let i=0;i<14;i++) {
-      const middle=(low+high)/2,result=pack(middle);
+      const middle=(low+high)/2,result=pack(middle,strategy);
       if(result){low=middle;candidate=result;}else high=middle;
     }
     if(low>largest){largest=low;best=candidate;}
@@ -131,17 +138,17 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
     const spanX=Math.max(...best.map(t=>t.x+t.width))-left,spanY=Math.max(...best.map(t=>t.y+t.height))-top;
     const zoom=Math.min(width/spanX,height/spanY);
     const ox=(width-spanX*zoom)/2,oy=(height-spanY*zoom)/2;
-    // Use the whole canvas after resolving collisions. A uniform transform
-    // keeps aspect ratios, desktop order, and the shared inter-window gaps.
-    best=best.map(t=>tile(ox+(t.x-left)*zoom,oy+(t.y-top)*zoom,t.width*zoom,t.height*zoom));
+    // Enlarge every preview equally; keep its caption readable without changing
+    // the native width/height ratios or introducing overlaps after the zoom.
+    best=best.map(t=>tile(ox+(t.x-left)*zoom,oy+(t.y-top)*zoom,t.width*zoom,t.preview*zoom+Math.min(32,t.meta*zoom),Math.min(32,t.meta*zoom)));
   }
   return {columns:1,tiles:best.map((t,i)=>({...t,origin:originals[i]}))};
 }
 
 export type DesktopAnchor = Area & {desktop:NativeDesktop; ids:string[]; centerX:number};
 
-// Preserve native desktop order in a weighted, two-dimensional map. A crowded
-// desktop gets the large area; its sparse successors can stack in the remainder.
+// Preserve native desktop order in a map weighted by total native window area.
+// Desktops with larger scenes get more room; sparse successors can stack.
 // These are layout guides and soft background washes, not visible containers.
 function desktopAreas(weights:number[], area:Area, aspect:number): Area[] {
   if(weights.length<=1)return weights.map(()=>area);
@@ -170,7 +177,9 @@ export function desktopOverviewTiles(panel:OverviewPanel, windows:Destination[],
   if(!groups.length) return {...overviewTiles(panel,windows,width,height,stacked,spatialIds),regions:[] as DesktopAnchor[]};
   const screen=panel.display.bounds;
   const top=Math.min(24,height*.1),canvasHeight=Math.max(1,height-top);
-  const areas=desktopAreas(groups.map(g=>g.items.length || .25),{x:0,y:0,width:Math.max(0,width),height:canvasHeight},screen.width/Math.max(1,screen.height));
+  const nativeArea=(w:Destination)=>Math.max(1,w.bounds.width)*Math.max(1,w.bounds.height);
+  const typicalArea=windows.length ? windows.reduce((sum,w)=>sum+nativeArea(w),0)/windows.length : 1;
+  const areas=desktopAreas(groups.map(g=>g.items.reduce((sum,w)=>sum+nativeArea(w),0) || typicalArea*.25),{x:0,y:0,width:Math.max(0,width),height:canvasHeight},screen.width/Math.max(1,screen.height));
   const byId=new Map<string,SpatialGuide>();
   groups.forEach((g,i)=>{
     const home=areas[i],scale=Math.min(home.width/screen.width,home.height/screen.height);

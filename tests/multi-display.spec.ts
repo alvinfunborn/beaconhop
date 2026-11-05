@@ -322,7 +322,7 @@ test('later desktop groups never drift to the left when stacked or inventory arr
   for(let i=1;i<centers.length;i++)expect(centers[i]).toBeGreaterThanOrEqual(centers[i-1]-.2);
 });
 
-test('large monitors use the canvas and keep small native windows readable',async({page})=>{
+test('large monitors fill the canvas while preserving relative native preview sizes across desktops',async({page})=>{
   await fixture(page);await page.setViewportSize({width:2496,height:1344});await page.goto(left);
   await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{
     s.desktops=['one','two','three','four'].map((id,i)=>({id,name:'Desktop '+(i+1),displayId:'1',current:i===0}));
@@ -343,9 +343,46 @@ test('large monitors use the canvas and keep small native windows readable',asyn
   const canvas=(await page.locator('.window-list').boundingBox())!;
   const coverage=boxes.reduce((sum,r)=>sum+r.w*r.h,0)/((canvas.width-28)*(canvas.height-28));
   expect(coverage).toBeGreaterThan(.55);
-  expect(Math.min(...boxes.map(r=>r.w))).toBeGreaterThan(300);
-  expect(Math.max(...boxes.map(r=>r.w))/Math.min(...boxes.map(r=>r.w))).toBeLessThan(1.6);
-  await page.screenshot({path:'logs/preview-density-20261104/large-monitor.png'});
+  const sizes=await page.getByRole('option').evaluateAll(async nodes=>{
+    const s:any=await (await import('/src/api.ts' as string)).call('get_session');
+    return nodes.map(n=>{
+      const original=s.windows.find((w:any)=>w.id===n.id.slice(7)).bounds;
+      return {width:n.getBoundingClientRect().width/original.width,
+        height:n.querySelector('.preview-frame')!.getBoundingClientRect().height/original.height};
+    });
+  });
+  const scale=sizes[0].width;
+  for(const size of sizes){
+    expect(Math.abs(size.width-scale)).toBeLessThan(.001);
+    expect(Math.abs(size.height-scale)).toBeLessThan(.001);
+  }
+  expect(Math.max(...boxes.map(r=>r.w))/Math.min(...boxes.map(r=>r.w))).toBeCloseTo(2560/810,2);
+  await page.screenshot({path:'logs/native-size-20261105/large-monitor.png'});
+});
+
+test('wide, portrait, hidden and minimized previews share one native size scale after resize',async({page})=>{
+  await fixture(page);await page.setViewportSize({width:1376,height:900});await page.goto(left);
+  await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{
+    s.desktops=['one','two','three'].map((id,i)=>({id,name:'Desktop '+(i+1),displayId:'1',current:i===0}));
+    const sizes=[[1600,400],[400,1600],[800,800],[1280,720],[640,360],[400,400]];
+    s.windows.forEach((w:any,i:number)=>{
+      w.displayId='1';w.desktopId=s.desktops[Math.floor(i/2)].id;w.currentDesktop=i<2;
+      w.minimized=i===4;w.hidden=i===5;
+      w.bounds={x:i*80,y:i*60,width:sizes[i][0],height:sizes[i][1]};
+    });
+    s.overview[0].slots=s.windows.map((w:any)=>w.id);s.overview[1].slots=[];
+  }));
+  for(const viewport of [{width:1376,height:900},{width:760,height:1000}]){
+    await page.setViewportSize(viewport);await assertFits(page,6);
+    await expect.poll(async()=>page.getByRole('option').evaluateAll(async nodes=>{
+      const s:any=await (await import('/src/api.ts' as string)).call('get_session');
+      const scales=nodes.flatMap(n=>{
+        const w=s.windows.find((w:any)=>w.id===n.id.slice(7));
+        return [n.getBoundingClientRect().width/w.bounds.width,n.querySelector('.preview-frame')!.getBoundingClientRect().height/w.bounds.height];
+      });
+      return Math.max(...scales)-Math.min(...scales);
+    })).toBeLessThan(.001);
+  }
 });
 
 test('desktop membership supports shared displays, an empty current desktop and unknown ownership',async({page})=>{

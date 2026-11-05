@@ -2,6 +2,25 @@
 
 Updated: 2026-11-05. Source implementation, packaged builds and native acceptance are separate. Dated entries describe their respective build, not necessarily the current executable.
 
+## 2026-11-05 proportional native thumbnail sizes
+
+The shared desktop overview now applies one common preview scale per physical
+display instead of narrowing every window into a similar size range. Native
+width and height ratios are preserved across desktops, including wide, portrait,
+hidden and minimized windows. Captions have their own height. Desktop placement
+guides use total native window area, and compact packing retains relative
+desktop order without fixed columns.
+
+Validation: all 70 UI tests passed, including mixed-size density, exact common
+scales after wide/portrait resize, search stability, desktop ownership, centered
+hints and navigation. The debug app/DMG built and the app was installed with the
+same signing requirement and unchanged BH/SB settings. Native readback found 24
+thumbnails on two displays, including both previously missing inactive-desktop
+windows. Eight real VS Code previews shared a common width/height scale within
+each display (approximately 0.239 and 0.256, with integer AX bounds); all 24
+targets passed a complete forward/reverse Tab cycle. The session was cancelled
+to inactive. Evidence and backup: ignored `logs/native-size-20261105/`.
+
 ## 2026-11-05 off-desktop window inventory recovery
 
 The installed overview omitted two real VS Code windows on inactive desktops 3
