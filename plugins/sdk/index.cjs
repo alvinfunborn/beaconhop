@@ -18,7 +18,7 @@ function validateManifest(value) {
   if (!Array.isArray(value.appIds) || !value.appIds.length || value.appIds.length > 16) throw Error('Provide 1–16 application IDs');
   value.appIds.forEach(id => string(id, 200, 'application ID'));
   const capabilities = value.capabilities ?? [];
-  if (!Array.isArray(capabilities) || capabilities.length > 16 || capabilities.some(c => c !== 'thumbnails')) throw Error('Unsupported plugin capability');
+  if (!Array.isArray(capabilities) || capabilities.length > 16 || capabilities.some(c => !['thumbnails', 'search'].includes(c))) throw Error('Unsupported plugin capability');
   const manifest = {protocol: 1, id: value.id, name: value.name, version: value.version, appIds: [...new Set(value.appIds)], capabilities: [...new Set(capabilities)]};
   if (value.description !== undefined) {
     if (typeof value.description !== 'string' || value.description.length > 500) throw Error('Invalid description');
@@ -76,6 +76,7 @@ async function startPlugin(options) {
   const manifest = validateManifest(options.manifest);
   if (typeof options.list !== 'function' || typeof options.activate !== 'function') throw Error('Provide list and activate handlers');
   if (manifest.capabilities.includes('thumbnails') && typeof options.thumbnails !== 'function') throw Error('Provide a thumbnails handler for that capability');
+  if (manifest.capabilities.includes('search') && typeof options.search !== 'function') throw Error('Provide a search handler for that capability');
   const root = options.directory ?? directory(), instance = crypto.randomUUID(), token = crypto.randomUUID();
   const filename = path.join(root, `${manifest.id}-${instance}.json`);
   const sockets = new Set();
@@ -83,6 +84,13 @@ async function startPlugin(options) {
   async function execute(method, params, signal) {
     const requestContext = {instance, signal};
     if (method === 'list') return inventory(await options.list(requestContext));
+    if (method === 'search' && manifest.capabilities.includes('search')) {
+      string(params.context, 512, 'context');
+      if (typeof params.query !== 'string' || params.query.length > 8192) throw Error('Invalid search query');
+      const result = inventory({contexts: [await options.search({context: params.context, query: params.query}, requestContext)]});
+      if (result.contexts[0].id !== params.context) throw Error('Search returned another context');
+      return result;
+    }
     if (method === 'activate') {
       string(params.context, 512, 'context'); string(params.item, 2048, 'item');
       const result = await options.activate({context: params.context, item: params.item}, requestContext);

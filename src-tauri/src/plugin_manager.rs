@@ -51,7 +51,10 @@ impl Manifest {
                 .iter()
                 .any(|id| id.trim().is_empty() || id.len() > 800)
             || self.capabilities.len() > 16
-            || self.capabilities.iter().any(|c| c != "thumbnails")
+            || self
+                .capabilities
+                .iter()
+                .any(|c| !matches!(c.as_str(), "thumbnails" | "search"))
             || self.description.len() > 2000
         {
             return Err("Invalid plugin manifest / 插件信息格式不正确".into());

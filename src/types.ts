@@ -78,6 +78,7 @@ export type Session = {
   layer: "windows" | "application" | "tabs" | "desktops";
   sticky: boolean;
   loading: boolean;
+  searching?: boolean;
   windows: Destination[];
   desktopPreviews?: Record<string, DesktopPreview>;
   resultIds: string[];

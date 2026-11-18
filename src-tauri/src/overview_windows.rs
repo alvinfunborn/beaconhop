@@ -91,7 +91,7 @@ fn place(window: &WebviewWindow, b: &Bounds) -> tauri::Result<()> {
     Ok(())
 }
 
-pub fn show(app: &AppHandle, panels: &[OverviewPanel], search: bool) -> tauri::Result<()> {
+pub fn prepare(app: &AppHandle, panels: &[OverviewPanel]) -> tauri::Result<Vec<WebviewWindow>> {
     // Prepare every screen before exposing any. A failed screen must not leave
     // invisible targets selectable on another screen.
     let windows = panels
@@ -106,15 +106,7 @@ pub fn show(app: &AppHandle, panels: &[OverviewPanel], search: bool) -> tauri::R
     for (panel, window) in panels.iter().zip(&windows) {
         place(window, &panel.bounds)?;
     }
-    for window in &windows {
-        platform::show_panel(window, false);
-    }
-    if search {
-        if let Some(window) = windows.iter().find(|w| w.label() == "switcher") {
-            platform::show_panel(window, true);
-        }
-    }
-    Ok(())
+    Ok(windows)
 }
 
 pub fn hide(app: &AppHandle) {

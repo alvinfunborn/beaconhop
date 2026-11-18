@@ -1,5 +1,7 @@
 # BeaconHop application plugins
 
+VS Code (`plugins/vscode`) and Edge (`plugins/browser`) live in this repository alongside the desktop app and are packaged separately. Both use `public/beaconhop.svg` as their logo source. `npm run plugins:prepare` regenerates the checked-in plugin icons; packaging also refreshes them automatically.
+
 The core owns shortcuts, hints, search, native window focus and Screen Buoy handoff. A plugin lists targets in its focused application context and activates an exact target. The adapters are local development packages, not marketplace releases. See [navigation](../docs/navigation.md) for supported features and acceptance boundaries.
 
 ## End-user installation
@@ -47,13 +49,13 @@ code --extensionDevelopmentPath="/absolute/path/to/beaconhop/plugins/vscode" \
   --extensions-dir="/absolute/path/to/isolated-vscode-extensions"
 ```
 
-Open text, diff or notebook editors in that window. The plugin runs in the local UI extension host, including when the workspace is remote. Terminals, webviews and custom editors are omitted. The identity is the actual VS Code `Tab` object and editor group, so duplicate labels do not collide.
+Open text, diff or notebook editors in that window. The plugin runs in the local UI extension host, including when the workspace is remote. Terminals, webviews and custom editors are omitted. The identity is the actual VS Code `Tab` object and editor group, so duplicate labels do not collide. Search additionally finds unopened files across all workspace folders by name or path, with open tabs first and up to 200 ranked results. Selecting a file opens its default editor. See [file search behavior](vscode/README.md) for exclusions and matching limits.
 
 For normal use, install from BH → Application plugins. For manual distribution, package with the official VS Code extension packager from `plugins/vscode`, then use Extensions → Install from VSIX. Install only the desired profile; BeaconHop availability requires that window's extension host to be running.
 
 ```sh
 npm exec --yes --package=@vscode/vsce -- vsce package --allow-missing-repository
-code --install-extension /absolute/path/to/beaconhop-tabs-0.2.0.vsix
+code --install-extension /absolute/path/to/beaconhop-tabs-1.0.0.vsix
 ```
 
 ## Codex
@@ -61,6 +63,10 @@ code --install-extension /absolute/path/to/beaconhop-tabs-0.2.0.vsix
 The initial macOS adapter is built into BeaconHop; no extension installation is required. It detects the Codex app's bundled CLI. `BEACONHOP_CODEX_BIN` can override the executable for development. The optional Codex data folder setting chooses the app-server's `CODEX_HOME`; it must correspond to the running GUI's data. Only the recent 100 persisted, unarchived sessions are listed. Listing uses the existing state database (`useStateDbOnly`) without scanning historical rollout files, and includes CLI, VS Code and desktop app-server sources across providers. It has an eight-second deadline. GUI tab enumeration and exact GUI activation confirmation are unavailable, so automatic continuation is disabled after a Codex session request.
 
 ## Protocol 1
+
+### Optional provider search
+
+Adapters may advertise `"search"` and implement `search({context, query}, {signal})` in the SDK. BeaconHop captures the focused context during `list`; subsequent queries stay bound to that instance/context even while the search panel owns focus. The wire request uses method `search`, params `{context, query}` (query at most 8,192 characters), and the reply is `{contexts:[{id, focused, items}]}` with exactly the requested context and the usual inventory/message bounds. `focused` may be false while BeaconHop owns focus. Results are already matched and ranked by the adapter. The core debounces queries, clears stale selection, and drops replies from older requests or sessions. Adapters without this capability retain local filtering of their open targets. `list` and held tab switching remain unchanged.
 
 ### Content presentation
 
@@ -162,7 +168,7 @@ API references: [Chrome tabs](https://developer.chrome.com/docs/extensions/refer
 
 ## SDK 与第三方接入（2026-11-02）
 
-[SDK 使用说明](sdk/README.md)与 [manifest schema](sdk/manifest.schema.json)提供可分发的 Node 适配器模板、类型及工具。SDK 封装鉴权、连接身份、心跳、消息大小限制和清理；作者实现 `list`、`activate`，可选实现缓存缩略图。VS Code 0.2.0 已使用同一份 SDK。浏览器仍使用扩展 + 本体 Native Messaging host；无需在 service worker 中运行 Node。
+[SDK 使用说明](sdk/README.md)与 [manifest schema](sdk/manifest.schema.json)提供可分发的 Node 适配器模板、类型及工具。SDK 封装鉴权、连接身份、心跳、消息大小限制和清理；作者实现 `list`、`activate`，可选实现缓存缩略图。VS Code 1.0.0 使用同一份 SDK，并支持工作区文件搜索。浏览器仍使用扩展 + 本体 Native Messaging host；无需在 service worker 中运行 Node。
 
 BH 设置的应用插件列表根据连接及注册信息动态生成，显示名称、版本、实例数与可用状态，支持立即启停。安装应用扩展后启动宿主即可自动接入；无需重编译 BH 或手填端口。已注册但离线的第三方记录可以移除，用户停用状态不会因重连或重新导入而消失。导入 `beaconhop.plugin.json` 只登记元信息，不安装或启动任何代码。
 
@@ -171,7 +177,7 @@ BH 设置的应用插件列表根据连接及注册信息动态生成，显示�
 ```sh
 node plugins/sdk/cli.cjs create ../my-adapter author.application
 node plugins/sdk/cli.cjs check ../my-adapter/beaconhop.plugin.json
-node plugins/sdk/cli.cjs install-vsix ./beaconhop-tabs-0.2.0.vsix
+node plugins/sdk/cli.cjs install-vsix ./beaconhop-tabs-1.0.0.vsix
 node plugins/sdk/cli.cjs probe vscode
 ```
 

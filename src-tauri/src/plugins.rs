@@ -190,12 +190,39 @@ pub fn rpc(endpoint: &Endpoint, method: &str, params: Value) -> Result<Value, St
         .cloned()
         .ok_or_else(|| "Plugin returned no result".into())
 }
-pub fn list(parent: &Destination, codex_home: &str) -> Result<Vec<Destination>, String> {
+#[derive(Clone, Debug)]
+pub struct SearchContext {
+    pub(crate) endpoint: Endpoint,
+    pub(crate) context: String,
+    pub(crate) parent: Destination,
+}
+impl SearchContext {
+    pub fn search(&self, query: &str) -> Result<Vec<Destination>, String> {
+        if !crate::plugin_manager::enabled(&self.endpoint.provider) {
+            return Err("Plugin is disabled".into());
+        }
+        let reply = rpc(
+            &self.endpoint,
+            "search",
+            json!({"context": self.context, "query": query}),
+        )?;
+        let mut inventory: Inventory =
+            serde_json::from_value(reply).map_err(|_| "Invalid search inventory")?;
+        if inventory.contexts.len() != 1 || inventory.contexts[0].id != self.context {
+            return Err("Search returned another context".into());
+        }
+        destinations(&self.parent, &self.endpoint, inventory.contexts.remove(0))
+    }
+}
+pub fn list(
+    parent: &Destination,
+    codex_home: &str,
+) -> Result<(Vec<Destination>, Option<SearchContext>), String> {
     if parent.app_id == "com.openai.codex" {
         if !crate::plugin_manager::enabled("codex") {
             return Err("Codex plugin is disabled".into());
         }
-        return crate::codex_plugin::list(parent, codex_home);
+        return crate::codex_plugin::list(parent, codex_home).map(|items| (items, None));
     }
     let endpoints: Vec<_> = discover_enabled()
         .into_iter()
@@ -246,7 +273,16 @@ pub fn list(parent: &Destination, codex_home: &str) -> Result<Vec<Destination>, 
         return Err(error.unwrap_or_else(|| "Cannot identify one focused plugin window. Focus the application and retry / 请聚焦应用后重试".into()));
     }
     let (endpoint, context) = focused.pop().unwrap();
-    destinations(parent, &endpoint, context)
+    let search = endpoint
+        .capabilities
+        .iter()
+        .any(|c| c == "search")
+        .then(|| SearchContext {
+            endpoint: endpoint.clone(),
+            context: context.id.clone(),
+            parent: parent.clone(),
+        });
+    destinations(parent, &endpoint, context).map(|items| (items, search))
 }
 fn destinations(
     parent: &Destination,

@@ -13,17 +13,43 @@ async function fixture(page: Page, windowsPreview = false) {
       const fixtureImages=${JSON.stringify(images)};
       const originalCall=call;
       call=async function(name,args={}) {
+        if(name==='get_panel_presentation') return null;
+        if(name==='panel_ready') { (window.__readyFrames ??= []).push({generation:args.generation, width:innerWidth,height:innerHeight, cards:[...document.querySelectorAll('.window-card')].map(n=>n.getBoundingClientRect().toJSON())});return; }
         if(name==='set_live_preview') { (window.__livePreviews ??= {})[args.id]=args;return; }
         if(name.includes('thumbnail')) { window.__previewIds=args.ids;return Object.fromEntries(args.ids.map(id=>[id,fixtureImages[Number(id)%6]])); }
         return originalCall(name,args);
       };
       window.__changeOverview=(mutate)=>{mutate(session);session.revision++;emit('session',session);};
-      window.__overviewEvent=(name)=>emit(name,null);
+      window.__overviewEvent=(name,payload=null)=>emit(name,payload);
     `});
   });
 }
 const left='/?preview=1&view=switcher&displays=2';
 const right=left+'&panel=switcher-display-32';
+
+for (const windowsPreview of [false,true]) {
+  test(`spatial Hint filtering keeps card geometry${windowsPreview ? ' and hides unmatched native previews' : ''}`,async({page})=>{
+    await fixture(page,windowsPreview);await page.goto(left);
+    await page.evaluate(()=>(window as any).__changeOverview((s:any)=>{
+      s.windows.forEach((w:any,i:number)=>w.hint=['AS','AD','SA','BS','BD','BA'][i]);
+    }));
+    await expect(page.getByRole('option')).toHaveCount(3);
+    const boxes=()=>page.getByRole('option').evaluateAll(nodes=>Object.fromEntries(nodes.map(n=>[n.id,n.getBoundingClientRect().toJSON()])));
+    const initial=await boxes();
+    await page.evaluate(()=>(window as any).__changeOverview((s:any)=>{
+      s.prefix='A';s.resultIds=s.windows.filter((w:any)=>w.hint.startsWith('A')).map((w:any)=>w.id);
+    }));
+    await expect(page.locator('.window-hint:visible')).toHaveText(['S','D']);
+    expect(await boxes()).toEqual(Object.fromEntries(Object.entries(initial).slice(0,2)));
+    if(windowsPreview)await expect.poll(()=>page.evaluate(()=>(window as any).__livePreviews?.['2']?.bounds)).toBeNull();
+    await page.evaluate(()=>(window as any).__changeOverview((s:any)=>{
+      s.prefix='';s.resultIds=s.windows.map((w:any)=>w.id);
+    }));
+    await expect(page.getByRole('option')).toHaveCount(3);
+    expect(await boxes()).toEqual(initial);
+  });
+}
+
 async function api(page: Page, name: string, args = {}) {
   return page.evaluate(async({name,args}) => (await import('/src/api.ts' as string)).call(name,args),{name,args});
 }
@@ -528,7 +554,8 @@ test('selection pops once, settles during rapid cross-display cycling and respec
   await page.clock.runFor(200);await select('1');
   expect((await pops()).length).toBe(after.length+1);
   await page.clock.runFor(200);
-  // WAAPI's document timeline is independent of the mocked JavaScript clock.
+  // The mocked timer clock and the browser's Web Animations timeline can settle
+  // on different frames. Wait for the real animation to finish before inspecting it.
   await expect.poll(()=>page.locator('#window-1 .window-hint').evaluate(n=>n.getAnimations().length)).toBe(0);
   await page.emulateMedia({reducedMotion:'reduce'});await select('2');
   expect((await pops()).length).toBe(after.length+1);
@@ -614,4 +641,73 @@ test('contact packing compacts the native X-shaped scene while keeping window pr
   });
   expect(result.tiles.reduce((sum:number,t:any)=>sum+t.width*t.height,0)/(1708*850)).toBeGreaterThan(.82);
   await page.screenshot({path:'logs/packing-cleanup-20261105/native-scene.png'});
+});
+
+
+test('opening commits final rectangles without replaying the original-stack animation',async({page})=>{
+  await page.emulateMedia({reducedMotion:'no-preference'});
+  await page.addInitScript(()=>{
+    const animate=Element.prototype.animate;
+    (window as any).__cardAnimations=[];
+    Element.prototype.animate=function(...args:Parameters<Element['animate']>){
+      if(this.classList.contains('window-card')) (window as any).__cardAnimations.push(this.id);
+      return animate.apply(this,args);
+    };
+  });
+  await fixture(page);await page.goto(left);await assertFits(page,3);
+  expect(await page.evaluate(()=>(window as any).__cardAnimations)).toEqual([]);
+  await page.getByRole('button',{name:'Original stack',exact:true}).click();
+  expect(await page.evaluate(()=>(window as any).__cardAnimations.length)).toBeGreaterThan(0);
+  await page.evaluate(()=>{
+    (window as any).__cardAnimations=[];
+    (window as any).__changeOverview((s:any)=>{s.sessionId++;s.mode='held';});
+  });
+  await expect(page.getByRole('button',{name:'Original stack',exact:true})).toHaveAttribute('aria-pressed','false');
+  expect(await page.evaluate(()=>(window as any).__cardAnimations)).toEqual([]);
+});
+
+test('geometry cache survives reopen and Z-order changes but invalidates moves and resize',async({page})=>{
+  await fixture(page);await page.goto(left);
+  const result=await page.evaluate(async()=>{
+    const {createOverviewCache}=await import('/src/overviewCache.ts' as string);
+    const cache=createOverviewCache();
+    const s:any=await (await import('/src/api.ts' as string)).call('get_session');
+    const panel=s.overview[0],windows=s.windows.filter((w:any)=>panel.slots.includes(w.id));
+    const first=cache(panel,windows,1200,700,false,s.spatialIds,s.desktops);
+    // JSON round trips mirror new Tauri events; references are never reused.
+    const again=JSON.parse(JSON.stringify({panel,windows,desktops:s.desktops}));
+    again.windows.forEach((w:any)=>{w.title='New title';w.hint='Z';});
+    const start=performance.now();
+    const reopened=cache(again.panel,again.windows,1200,700,false,[...s.spatialIds].reverse(),again.desktops);
+    const elapsed=performance.now()-start;
+    again.windows[0].bounds.width+=100;
+    const moved=cache(again.panel,again.windows,1200,700,false,s.spatialIds,again.desktops);
+    const resized=cache(panel,windows,800,700,false,s.spatialIds,s.desktops);
+    return {reused:first===reopened,moved:first!==moved,resized:first!==resized,elapsed};
+  });
+  expect(result.reused).toBe(true);expect(result.moved).toBe(true);expect(result.resized).toBe(true);
+  expect(result.elapsed).toBeLessThan(10);
+});
+
+test('native presentation acknowledges only the requested session at the final viewport',async({page})=>{
+  await fixture(page,true);await page.goto(left);await assertFits(page,3);
+  const send=async(generation:number,width:number,sessionOffset=0)=>page.evaluate(async({generation,width,sessionOffset})=>{
+    const session:any=await (await import('/src/api.ts' as string)).call('get_session');
+    session.sessionId+=sessionOffset;
+    (window as any).__overviewEvent('panel-presentation',{label:'switcher',generation,width,height:innerHeight,session});
+  },{generation,width,sessionOffset});
+  await send(1,1020);
+  await expect.poll(()=>page.evaluate(()=>(window as any).__readyFrames?.map((f:any)=>f.generation))).toEqual([1]);
+  await page.evaluate(async()=>{
+    const session:any=await (await import('/src/api.ts' as string)).call('get_session');
+    (window as any).__overviewEvent('panel-presentation',{label:'another-display',generation:99,width:innerWidth,height:innerHeight,session});
+  });
+  await send(2,1100);
+  await page.waitForTimeout(50);
+  expect(await page.evaluate(()=>(window as any).__readyFrames.map((f:any)=>f.generation))).toEqual([1]);
+  await page.setViewportSize({width:1100,height:760});
+  await expect.poll(()=>page.evaluate(()=>(window as any).__readyFrames.map((f:any)=>f.generation))).toContain(2);
+  await send(3,1100,-1);
+  await page.waitForTimeout(50);
+  expect(await page.evaluate(()=>(window as any).__readyFrames.map((f:any)=>f.generation))).not.toContain(3);
 });

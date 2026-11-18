@@ -1,11 +1,23 @@
 {
   "name": "@beaconhop/plugin-sdk",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Local application adapters for BeaconHop",
   "license": "MIT",
   "main": "index.cjs",
   "types": "index.d.ts",
-  "bin": {"beaconhop-plugin": "cli.cjs"},
-  "engines": {"node": ">=18"},
-  "files": ["index.cjs", "index.d.ts", "cli.cjs", "manifest.schema.json", "template.cjs", "README.md", "LICENSE"]
+  "bin": {
+    "beaconhop-plugin": "cli.cjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "index.cjs",
+    "index.d.ts",
+    "cli.cjs",
+    "manifest.schema.json",
+    "template.cjs",
+    "README.md",
+    "LICENSE"
+  ]
 }

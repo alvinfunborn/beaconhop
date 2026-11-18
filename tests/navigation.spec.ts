@@ -139,11 +139,16 @@ test('tab grid arrows follow rows and columns, including after filtering and res
     const cards=page.getByRole('option');
     await expect(cards).toHaveCount(6);
     await expect(cards.first()).toHaveAttribute('aria-selected','true');
-    // Wait for ResizeObserver and the geometry publication to settle.
-    await expect(async()=>{
-      const boxes=await cards.evaluateAll(nodes=>nodes.map(n=>({x:(n as HTMLElement).offsetLeft,y:(n as HTMLElement).offsetTop})));
-      const columns=boxes.filter(b=>b.y===boxes[0].y).length;
-      expect(columns).toBeGreaterThan(1);
+    // ResizeObserver can repack after setViewportSize resolves. Wait for the
+    // cards to fit the new canvas before recording its column count.
+    await expect.poll(()=>cards.evaluateAll(nodes=>nodes.every(node=>{
+      const canvas=node.parentElement!.getBoundingClientRect();
+      const card=node.getBoundingClientRect();
+      return card.width>0 && card.right<=canvas.right+1;
+    }))).toBe(true);
+    const boxes=await cards.evaluateAll(nodes=>nodes.map(n=>({x:(n as HTMLElement).offsetLeft,y:(n as HTMLElement).offsetTop})));
+    const columns=boxes.filter(b=>b.y===boxes[0].y).length;
+    expect(columns).toBeGreaterThan(1);
       await input.press('ArrowRight');
       await expect(cards.nth(1)).toHaveAttribute('aria-selected','true');
       await input.press('ArrowDown');
@@ -152,7 +157,6 @@ test('tab grid arrows follow rows and columns, including after filtering and res
       await expect(cards.nth(columns)).toHaveAttribute('aria-selected','true');
       await input.press('ArrowUp');
       await expect(cards.first()).toHaveAttribute('aria-selected','true');
-    }).toPass();
     await input.fill('example.test/4');
     await expect(cards).toHaveCount(1);
     await input.press('ArrowDown');

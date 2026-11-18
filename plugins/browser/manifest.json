@@ -1,10 +1,35 @@
 {
   "manifest_version": 3,
   "name": "BeaconHop Tabs",
-  "version": "0.2.1",
+  "version": "1.0.0",
   "description": "Switch tabs in the focused browser window with BeaconHop.",
-  "permissions": ["tabs", "nativeMessaging", "alarms", "favicon"],
-  "optional_host_permissions": ["<all_urls>"],
-  "background": { "service_worker": "background.js", "type": "module" },
-  "action": { "default_title": "BeaconHop Tabs", "default_popup": "popup.html" }
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "permissions": [
+    "tabs",
+    "nativeMessaging",
+    "alarms",
+    "favicon"
+  ],
+  "optional_host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "BeaconHop Tabs",
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    },
+    "default_popup": "popup.html"
+  }
 }
