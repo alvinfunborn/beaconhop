@@ -104,8 +104,8 @@ It does not search or read file contents.
 
 - Repository is public: https://github.com/alvinfunborn/beaconhop .
 - GitHub Pages download/privacy/setup pages are live: https://alvinfunborn.github.io/beaconhop/ .
-- VS Code 1.0.0 uploaded and in Marketplace validation; public listing: https://marketplace.visualstudio.com/items?itemName=beaconhop.beaconhop-tabs .
-- Chrome 1.0.0 uploaded as a draft, replacing the withdrawn 0.2.1 review. Extension ID: `ibfbnolmkggfokdaohfdobfjklcccjma`.
+- VS Code 1.0.0 is public: https://marketplace.visualstudio.com/items?itemName=beaconhop.beaconhop-tabs .
+- Chrome 1.0.0 submitted; dashboard status is Pending review; automatic publication after approval is enabled. Extension ID: `ibfbnolmkggfokdaohfdobfjklcccjma`.
 - Edge enrollment is complete and its 1.0.0 package passed validation. Store metadata is being completed; account verification and final submission remain separate.
 - Chrome listing includes a real connected extension popup screenshot, public privacy URL, support URL and reviewer setup instructions. Browsing history and website content are disclosed as local processing.
 
