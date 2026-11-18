@@ -2,7 +2,7 @@
   "name": "beaconhop-tabs",
   "displayName": "BeaconHop Tabs",
   "description": "Expose editor tabs in the focused VS Code window to BeaconHop.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "beaconhop",
   "license": "MIT",
   "engines": {
@@ -25,11 +25,22 @@
     "virtualWorkspaces": true
   },
   "scripts": {
-    "vscode:prepublish": "node ../../scripts/sync-plugin-sdk.mjs"
+    "vscode:prepublish": "node ../../scripts/sync-plugin-sdk.mjs && node ../../scripts/sync-plugin-icons.mjs"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/alvinfunborn/beaconhop.git",
     "directory": "plugins/vscode"
-  }
+  },
+  "icon": "icon.png",
+  "homepage": "https://alvinfunborn.github.io/beaconhop/",
+  "bugs": {
+    "url": "https://github.com/alvinfunborn/beaconhop/issues"
+  },
+  "keywords": [
+    "beaconhop",
+    "tabs",
+    "keyboard",
+    "navigation"
+  ]
 }

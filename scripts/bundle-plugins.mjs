@@ -1,5 +1,6 @@
 // Build-time only. End users need neither Node nor a package manager.
 import './sync-plugin-sdk.mjs';
+import './sync-plugin-icons.mjs';
 import { createVSIX } from '@vscode/vsce';
 import { zipSync } from 'fflate';
 import { createHash } from 'node:crypto';
@@ -36,6 +37,7 @@ const files = { 'manifest.json': Buffer.from(JSON.stringify(browser, null, 2)) }
 for (const name of ['background.js', 'previews.js', 'popup.html', 'popup.js', 'popup.css']) files[name] = await read(`plugins/browser/${name}`);
 files['LICENSE'] = await read('LICENSE');
 for (const size of [16, 32, 48, 128]) files[`icons/${size}.png`] = await sharp(await read('public/beaconhop.svg')).resize(size, size).png().toBuffer();
+for (const icon of new Set([...Object.values(browser.icons), ...Object.values(browser.action.default_icon)])) files[icon] = await read(`plugins/browser/${icon}`);
 // Only declared runtime files enter the store package; no tests, source maps or local state.
 await writeFile(new URL('beaconhop-edge.zip', output), zipSync(files, { level: 6, mtime: new Date('2026-01-01T00:00:00Z') }));
 const vsix = await readFile(new URL('beaconhop-tabs.vsix', output));
