@@ -100,12 +100,21 @@ It documents open-tab switching and the desktop application requirement. Version
 workspace enumeration uses VS Code's API and may reach remote workspace folders.
 It does not search or read file contents.
 
-## Required before final submission
+## Verified status on 2026-11-18
+
+- Repository is public: https://github.com/alvinfunborn/beaconhop .
+- GitHub Pages download/privacy/setup pages are live: https://alvinfunborn.github.io/beaconhop/ .
+- VS Code 0.2.1 is public: https://marketplace.visualstudio.com/items?itemName=beaconhop.beaconhop-tabs .
+- Chrome 0.2.1 submitted; dashboard status is Pending review; automatic publication after approval is enabled. Extension ID: `ibfbnolmkggfokdaohfdobfjklcccjma`.
+- Edge developer account enrollment awaits the owner's actual country and individual/company selection. No Edge package has been submitted yet.
+- Chrome listing includes a real connected extension popup screenshot, public privacy URL, support URL and reviewer setup instructions. Browsing history and website content are disclosed as local processing.
+
+## Submission requirements
 
 - A publicly accessible BeaconHop desktop download, usable by reviewers and users.
-  The current private repository's release URLs are not public downloads.
+  Public release downloads are now available from the repository.
 - A public privacy-policy URL and a public support contact supplied by the owner.
-  Links into a private repository cannot serve as public support/policy pages.
+  The public Pages privacy policy and repository issues are supplied.
 - Chrome requires at least one genuine product screenshot (1280 x 800 or
   640 x 400). Do not substitute a simulated connection or generated UI for real
   product evidence. See the store's current image requirements when uploading.
