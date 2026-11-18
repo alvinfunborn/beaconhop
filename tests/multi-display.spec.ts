@@ -173,11 +173,16 @@ test('dense and portrait inventories fit all previews without a scrolling rail',
 test('spatial hints stay centered and arrows follow final positions even during unfolding',async({page})=>{
   await page.emulateMedia({reducedMotion:'no-preference'});
   await fixture(page);await page.setViewportSize({width:1376,height:804});await page.goto(left);
-  await page.waitForTimeout(400);
-  const card=page.locator('#window-0'),hint=card.locator('.window-hint'),preview=card.locator('.preview-frame');
-  const h=await hint.boundingBox(),p=await preview.boundingBox();
-  expect(h!.x+h!.width/2).toBeCloseTo(p!.x+p!.width/2,0);
-  expect(h!.y+h!.height/2).toBeCloseTo(p!.y+p!.height/2,0);
+  const card=page.locator('#window-0');
+  await expect(card).toBeVisible();
+  // Read both moving rectangles in one frame; separate protocol round trips
+  // can sample different points in the unfolding animation on a busy runner.
+  const {hint,preview}=await card.evaluate(node=>{
+    const center=(selector:string)=>{const r=node.querySelector(selector)!.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};};
+    return {hint:center('.window-hint'),preview:center('.preview-frame')};
+  });
+  expect(hint.x).toBeCloseTo(preview.x,0);
+  expect(hint.y).toBeCloseTo(preview.y,0);
   await api(page,'open_search');const input=page.getByRole('textbox');
   // Fixture: expanded order is D, S, A across the screen, with small y offsets.
   await page.evaluate(()=> (window as any).__changeOverview((s:any)=>{s.selected='2';}));

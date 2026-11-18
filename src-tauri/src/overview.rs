@@ -40,6 +40,18 @@ pub fn coordinate_scale(display: &Display) -> f64 {
     }
 }
 
+pub fn panel_bounds(display: &Display) -> Bounds {
+    let scale = coordinate_scale(display);
+    let width = (display.bounds.width / scale - 64.).max(1.) * scale;
+    let height = (display.bounds.height / scale - 96.).max(1.) * scale;
+    Bounds {
+        x: display.bounds.x + (display.bounds.width - width) / 2.,
+        y: display.bounds.y + (display.bounds.height - height) / 2.,
+        width,
+        height,
+    }
+}
+
 impl StableOverview {
     pub fn retain_displays(&mut self, displays: &[Display]) {
         self.slots
@@ -105,9 +117,6 @@ impl StableOverview {
             if slots.iter().all(Option::is_none) {
                 slots.clear();
             }
-            let scale = coordinate_scale(display);
-            let width = (display.bounds.width / scale - 64.).max(1.);
-            let height = (display.bounds.height / scale - 96.).max(1.);
             panels.push(OverviewPanel {
                 label: if display.id == anchor {
                     "switcher".into()
@@ -115,12 +124,7 @@ impl StableOverview {
                     display_label(&display.id)
                 },
                 display: display.clone(),
-                bounds: Bounds {
-                    x: display.bounds.x + (display.bounds.width - width * scale) / 2.,
-                    y: display.bounds.y + (display.bounds.height - height * scale) / 2.,
-                    width: width * scale,
-                    height: height * scale,
-                },
+                bounds: panel_bounds(display),
                 slots: slots.clone(),
             });
         }

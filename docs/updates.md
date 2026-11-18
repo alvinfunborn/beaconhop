@@ -57,7 +57,7 @@ No repository visibility changes or release publication happen automatically.
 
 The workflow builds macOS Apple Silicon and Windows x64 packages, collects both signed packages, and generates `latest.json` plus SHA-256 checksums. It refuses to create an incomplete two-platform manifest or a prerelease manifest. Intel Mac packages are not advertised.
 
-Only an explicit run with `publish=true` creates a release. The release must contain the manifest and the exact filenames referenced by it:
+Only an explicit run with `publish=true` creates a release through this workflow. Private repository releases may also use a build-only run followed by verified asset upload and explicit publication, as for v0.3.0. The official Edge store gate applies to public distribution; private releases retain the unavailable store-install state and document developer extension setup. The release must contain the manifest and the exact filenames referenced by it:
 
 - `beaconhop-macos-arm64.app.tar.gz` and its `.sig`
 - `beaconhop-windows-setup.exe` and its `.sig`

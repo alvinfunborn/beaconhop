@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { call } from "./api";
 import type { Session } from "./types";
+import { timing, afterFrame } from "./performance";
 
 // Decode a whole batch before publishing it, so one invocation doesn't fill card by card.
 async function decoded(images: Record<string, string>) {
@@ -14,6 +15,10 @@ export function usePreviews(session: Session | undefined, enabled: boolean) {
   const [images, setImages] = useState<Record<string, string>>({});
   const tabCache = useRef(new Map<string, {key: string; image: string}>());
   const active = session?.mode !== "inactive";
+  useEffect(()=>{
+    if (!active || !session || !Object.keys(images).length) return;
+    return afterFrame(()=>timing("preview_frame",session.sessionId,0,Object.keys(images).length));
+  },[images,active,session?.sessionId]);
   const targets = useRef<string[]>([]);
   targets.current = session?.layer === "desktops"
     ? [...new Set(Object.values(session.desktopPreviews ?? {}).flatMap(p => p.windows.map(w => w.id)))]
@@ -55,14 +60,25 @@ export function usePreviews(session: Session | undefined, enabled: boolean) {
       return () => { alive = false; };
     }
     const args = { ids: targets.current, sessionId: session.sessionId };
-    // Native cache can be warm even on the first invocation of this WebView.
-    // This read remains independent of a slow refresh already in progress.
-    const cached = call<Record<string,string>>("get_cached_thumbnails", args).then(decoded);
-    const fresh = call<Record<string,string>>("get_thumbnails", args).then(decoded);
-    let refreshed = false;
-    cached.then(data => { if (alive && !refreshed) setImages(data); }).catch(() => {});
-    fresh.then(data => { if (alive) { refreshed = true; setImages(data); } }).catch(() => {});
-    return () => {alive = false;};
+    const started = performance.now();
+    let cancelRefresh = () => {};
+    // Publish decoded cache before starting ScreenCaptureKit. Capture and image
+    // encoding otherwise compete with the very first frame on both displays.
+    void call<Record<string,string>>("get_cached_thumbnails", args).then(decoded)
+      .then(data => {
+        timing("preview_cache",session.sessionId,performance.now()-started,Object.keys(data).length);
+        if (alive) setImages(data);
+      }).catch(() => {}).then(() => {
+        if (!alive) return;
+        cancelRefresh = afterFrame(() => {
+          if (!alive) return;
+          void call<Record<string,string>>("get_thumbnails", args).then(decoded).then(data => {
+            timing("preview_fresh",session.sessionId,performance.now()-started,Object.keys(data).length);
+            if (alive) setImages(data);
+          }).catch(() => {});
+        });
+      });
+    return () => {alive = false; cancelRefresh();};
   }, [session?.sessionId, session?.loading, session?.layer, active, enabled]);
   return images;
 }
