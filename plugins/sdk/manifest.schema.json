@@ -42,7 +42,7 @@
       "uniqueItems": true,
       "items": {
         "enum": [
-          "thumbnails"
+          "thumbnails", "search"
         ]
       }
     },

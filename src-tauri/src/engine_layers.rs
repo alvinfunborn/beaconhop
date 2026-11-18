@@ -923,3 +923,52 @@ fn desktop_continuation_uses_target_monitor_when_no_window_has_focus() {
     assert_eq!(e.session.windows.len(), 1);
     assert_eq!(e.session.windows[0].window.id, "w3");
 }
+
+#[test]
+fn file_search_ignores_late_results_and_blocks_activation_until_current_results_arrive() {
+    let mut e = engine();
+    e.open_layer(Layer::Tabs, Mode::Search, false, false, None);
+    let sid = e.session.session_id;
+    e.tabs_loaded(sid, Ok(vec![]));
+    e.content_search = Some(crate::plugins::SearchContext {
+        endpoint: crate::plugins::Endpoint {
+            protocol: 1,
+            provider: "test".into(),
+            name: None,
+            version: None,
+            instance: "instance".into(),
+            app_ids: vec![],
+            port: 1,
+            token: "token".into(),
+            capabilities: vec!["search".into()],
+        },
+        context: "context".into(),
+        parent: e.session.origin.clone().unwrap(),
+    });
+    e.search("first".into());
+    let (_, first, _, _) = e.content_search_request().unwrap();
+    assert!(e.content_search_request().is_none());
+    assert!(e.activate(None).is_empty());
+    e.search("second".into());
+    let (_, second, _, _) = e.content_search_request().unwrap();
+    assert!(e
+        .content_search_loaded(sid, first, "first", Ok(tabs(&e)))
+        .is_empty());
+    e.search("first".into());
+    let (_, third, _, _) = e.content_search_request().unwrap();
+    assert!(e
+        .content_search_loaded(sid, first, "first", Ok(tabs(&e)))
+        .is_empty());
+    assert!(e
+        .content_search_loaded(sid, second, "second", Ok(tabs(&e)))
+        .is_empty());
+    let items = tabs(&e);
+    e.content_search_loaded(sid, third, "first", Ok(items));
+    // Provider matching is authoritative, including platform path separators.
+    assert_eq!(e.results().len(), 3);
+    assert!(e.session.selected.is_some());
+    e.cancel();
+    assert!(e
+        .content_search_loaded(sid, third, "first", Ok(vec![]))
+        .is_empty());
+}

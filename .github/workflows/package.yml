@@ -9,7 +9,11 @@ on:
       tag:
         description: 'Stable version tag, matching package.json'
         type: string
-        default: 'v0.3.0'
+        default: 'v1.0.0'
+      allow_pending_edge:
+        description: 'Publish while Edge review is pending; Edge store installation stays unavailable'
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -39,7 +43,7 @@ jobs:
       - run: npm run check:version
       - run: npm run plugins:bundle
       - name: Require official Edge listing before publishing
-        if: inputs.publish
+        if: inputs.publish && !inputs.allow_pending_edge
         run: npm run plugins:check-release
       - run: npm test
       - name: Configure update channel
@@ -80,13 +84,19 @@ jobs:
         with:
           pattern: BeaconHop-*
           path: packages
+      - uses: actions/download-artifact@v4
+        with:
+          name: Application-plugins-macos-arm64
+          path: plugin-packages
       - name: Collect signed platform packages
         run: |
           mkdir signed
           cp packages/BeaconHop-macos-arm64/macos/BeaconHop.app.tar.gz signed/beaconhop-macos-arm64.app.tar.gz
           cp packages/BeaconHop-macos-arm64/macos/BeaconHop.app.tar.gz.sig signed/beaconhop-macos-arm64.app.tar.gz.sig
+          cp packages/BeaconHop-macos-arm64/dmg/*.dmg signed/beaconhop-macos-arm64.dmg
           cp packages/BeaconHop-windows-x64/nsis/*-setup.exe signed/beaconhop-windows-setup.exe
           cp packages/BeaconHop-windows-x64/nsis/*-setup.exe.sig signed/beaconhop-windows-setup.exe.sig
+          cp plugin-packages/beaconhop-tabs.vsix plugin-packages/beaconhop-edge.zip signed/
       - name: Generate complete manifest
         env:
           RELEASE_TAG: ${{ inputs.tag }}

@@ -1,5 +1,6 @@
 body { width: 320px; margin: 18px; font: 13px/1.5 system-ui, sans-serif; color: #222; background: #fafafa; }
 h1 { font-size: 18px; margin: 0; }
+header { display: flex; align-items: center; gap: 10px; }
 p { margin: 10px 0; }
 button { width: 100%; padding: 9px; margin-top: 8px; border: 1px solid #bbb; border-radius: 7px; background: white; cursor: pointer; }
 #enable { background: #ffcf48; border-color: #c5a037; }

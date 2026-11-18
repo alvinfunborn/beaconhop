@@ -97,3 +97,18 @@ test('context presentation and descriptions cross the wire and reject malformed 
   presentation='unsupported';assert.match((await rpc(endpoint,'list')).error,/presentation/);
   presentation='text';description='x'.repeat(8193);assert.match((await rpc(endpoint,'list')).error,/description/);
 });
+
+test('optional search validates queries, context identity and result bounds', async t => {
+  let result = {id:'window', focused:false, items:[{id:'unopened', title:'File.ts'}]};
+  const {endpoint} = await fixture(t, {manifest:{...manifest, capabilities:['search']}, search:({context, query}) => {
+    assert.equal(context, 'window'); assert.equal(query, 'file'); return result;
+  }});
+  assert.equal((await rpc(endpoint, 'search', {context:'window', query:'file'})).result.contexts[0].items[0].id, 'unopened');
+  assert.match((await rpc(endpoint, 'search', {context:'window', query:42})).error, /query/);
+  result = {...result, id:'another'};
+  assert.match((await rpc(endpoint, 'search', {context:'window', query:'file'})).error, /another context/);
+  result = {id:'window', focused:false, items:Array.from({length:2001}, (_, i) => ({id:String(i), title:'File'}))};
+  assert.match((await rpc(endpoint, 'search', {context:'window', query:'file'})).error, /context/);
+  const legacy = await fixture(t);
+  assert.match((await rpc(legacy.endpoint, 'search', {context:'window', query:'file'})).error, /Unsupported/);
+});

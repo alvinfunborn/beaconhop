@@ -6,11 +6,14 @@ let port;
 let connected = false;
 let reconnecting = false;
 const icons = new Map();
+const iconKey = tab => `${tab.url}\n${tab.favIconUrl ?? ''}`;
 function favicon(tab) {
-  const key = `${tab.url}\n${tab.favIconUrl ?? ''}`;
+  const key = iconKey(tab);
   if (!icons.has(key)) {
     if (icons.size >= 256) icons.delete(icons.keys().next().value);
-    icons.set(key, (async () => {
+    const entry = {};
+    icons.set(key, entry);
+    entry.pending = (async () => {
       try {
         if (!/^https?:/.test(tab.url ?? '')) return undefined;
         const url = new URL(chrome.runtime.getURL('/_favicon/'));
@@ -20,11 +23,12 @@ function favicon(tab) {
         if (!response.ok) return undefined;
         const bytes = new Uint8Array(await response.arrayBuffer());
         if (bytes.length > 6000 || ![137,80,78,71,13,10,26,10].every((v,i) => bytes[i] === v)) return undefined;
-        return 'data:image/png;base64,' + btoa(String.fromCharCode(...bytes));
+        entry.image = 'data:image/png;base64,' + btoa(String.fromCharCode(...bytes));
+        return entry.image;
       } catch { icons.delete(key); return undefined; }
-    })());
+    })();
   }
-  return icons.get(key);
+  return icons.get(key)?.pending;
 }
 function identity() {
   const ua = navigator.userAgent;
@@ -32,22 +36,24 @@ function identity() {
   if (navigator.brave) return ['com.brave.browser', 'brave.exe'];
   return ['com.google.Chrome', 'chrome.exe', 'org.chromium.Chromium', 'chromium.exe'];
 }
+// Warm icons on browser events, never on the inventory critical path.
+chrome.tabs.onUpdated.addListener((_id, _change, tab) => { void favicon(tab); });
+void chrome.windows.getAll({populate:true, windowTypes:['normal']}).then(windows => {
+  for (const tab of windows.filter(w => w.focused).flatMap(w => w.tabs ?? []).slice(0,64)) void favicon(tab);
+}).catch(() => {});
 async function execute(method, params) {
   if (method === 'thumbnails') return previews.read(params);
   if (method === 'list') {
     const windows = await chrome.windows.getAll({populate:true, windowTypes:['normal']});
     // Bound both latency and frame size. Missing icons never block tab switching.
-    const images = new Map();
     const focusedTabs = windows.filter(w => w.focused).flatMap(w => w.tabs ?? []).slice(0,64);
-    await Promise.all(focusedTabs.map(async tab => {
-      const icon = await favicon(tab);
-      if (icon) images.set(tab.id, icon);
-    }));
+    const iconIds = new Set(focusedTabs.map(tab => tab.id));
+    for (const tab of focusedTabs) void favicon(tab);
     return {contexts: windows.map(window => ({
       id: String(window.id), focused: window.focused,
       items: (window.tabs ?? []).sort((a,b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0)).map(tab => ({
         id: String(tab.id), title: tab.title || tab.url || 'Tab', subtitle: tab.url || '', active: tab.active,
-        icon: images.get(tab.id),
+        icon: iconIds.has(tab.id) ? icons.get(iconKey(tab))?.image : undefined,
         preview: previews.has(tab),
       })),
     }))};

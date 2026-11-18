@@ -391,10 +391,23 @@ private extension CGRect { var area: Double { isNull ? 0 : width * height } }
     return json(result)
 }
 @_cdecl("bh_screen_permission") public func bhScreenPermission(_ request: Bool) -> Bool { request ? CGRequestScreenCaptureAccess() : CGPreflightScreenCaptureAccess() }
+// Give WKWebView a visible native host so it can commit the resized layout,
+// while keeping the previous backing surface completely transparent.
+@_cdecl("bh_prepare_panel") public func bhPreparePanel(_ raw: UnsafeMutableRawPointer?) {
+    guard let raw else {return}; let window = Unmanaged<NSWindow>.fromOpaque(raw).takeUnretainedValue()
+    if window.isVisible {return}
+    window.alphaValue = 0
+    window.ignoresMouseEvents = true
+    window.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary,.stationary,.ignoresCycle]
+    window.level = .floating
+    window.orderFrontRegardless()
+}
 @_cdecl("bh_panel") public func bhPanel(_ raw: UnsafeMutableRawPointer?, _ search: Bool) {
     guard let raw else {return}; let window = Unmanaged<NSWindow>.fromOpaque(raw).takeUnretainedValue()
     window.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary,.stationary,.ignoresCycle]
     window.level = .floating
+    window.alphaValue = 1
+    window.ignoresMouseEvents = false
     if search {NSApp.activate(ignoringOtherApps:true);window.makeKeyAndOrderFront(nil)} else {window.orderFrontRegardless()}
 }
 @_cdecl("bh_focus_settings") public func bhFocusSettings(_ raw: UnsafeMutableRawPointer?) {

@@ -2,7 +2,8 @@ import { translate } from "./copy";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { Config, Session, Permissions, Destination, DesktopPreview } from "./types";
 import { call, subscribe, defaults, native, preview, panelLabel, shareSearchDraft } from "./api";
-import { tileWindows, textRows, desktopOverviewTiles, type Tile, type DesktopAnchor } from "./layout";
+import { tileWindows, textRows, type Tile, type DesktopAnchor } from "./layout";
+import { createOverviewCache } from "./overviewCache";
 import { presentation } from "./presentation";
 import { usePreviews } from "./previews";
 import { DesktopOverview } from "./DesktopOverview";
@@ -784,20 +785,25 @@ function Shortcut({ value, onChange, label, zh, defaultValue, singleKey = false 
   </div>;
 }
 
+type PanelPresentation = { label: string; generation: number; width: number; height: number; session: Session };
+
 function Switcher({ config, zh }: { config: Config; zh: boolean }) {
   const t = (en: string, cn?: string) => translate(zh, en, cn);
   const [session, setSession] = useState<Session>();
+  const [frame, setFrame] = useState<PanelPresentation>();
+  const overviewCache = useRef(createOverviewCache());
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const [inspected, setInspected] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const composing = useRef(false);
   const draftQuery = useRef<string | null>(null);
-  const [stacked, setStacked] = useState(false);
+  const [stack, setStack] = useState<{sessionId?:number; mode?:string; value:boolean}>({value:false});
+  const stacked = stack.sessionId === session?.sessionId && stack.mode === session?.mode && stack.value;
   const list = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let disposed = false;
-    let off = () => {};
+    const off: Array<() => void> = [];
     const accept = (s: Session) =>
       setSession((old) =>
         !old ||
@@ -806,9 +812,20 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
           ? s
           : old,
       );
-    subscribe<Session>("session", accept).then((f) =>
-      disposed ? f() : (off = f),
-    );
+    const keep = (f: () => void) => disposed ? f() : off.push(f);
+    subscribe<Session>("session", accept).then(keep);
+    if (native) {
+      const prepare = (next: PanelPresentation | null) => {
+        if (!next || disposed || next.label !== panelLabel) return;
+        accept(next.session);
+        setFrame(old => !old || next.generation >= old.generation ? next : old);
+      };
+      // Fetch after subscribing: a freshly-created WebView may have missed the event.
+      subscribe<PanelPresentation>("panel-presentation", prepare).then(f => {
+        keep(f);
+        if (!disposed) call<PanelPresentation | null>("get_panel_presentation").then(prepare).catch(e => setError(String(e)));
+      });
+    }
     call<Session>("get_session")
       .then((s) => {
         if (!disposed) accept(s);
@@ -816,12 +833,11 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
       .catch((e) => setError(String(e)));
     return () => {
       disposed = true;
-      off();
+      off.forEach(f => f());
     };
   }, []);
   useEffect(() => {
     draftQuery.current = null;
-    setStacked(false);
     setQuery(session?.query ?? "");
     setError("");
   }, [session?.sessionId, session?.mode]);
@@ -869,15 +885,18 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
     shareSearchDraft(session?.sessionId ?? 0,value).catch(()=>{});
   }
   const [available, setAvailable] = useState({ width: 0, height: 0 });
-  useEffect(() => {
+  useLayoutEffect(() => {
     const node = list.current;
     if (!node) return;
-    const refresh = () => setAvailable({ width: Math.max(0, node.clientWidth - 28), height: Math.max(0, node.clientHeight - 28) });
+    const refresh = () => {
+      const width = Math.max(0, node.clientWidth - 28), height = Math.max(0, node.clientHeight - 28);
+      setAvailable(old => old.width === width && old.height === height ? old : {width, height});
+    };
     const observer = new ResizeObserver(refresh);
     observer.observe(node);
     refresh();
     return () => observer.disconnect();
-  }, []);
+  }, [frame?.generation, session?.sessionId, session?.mode]);
   async function action(name: string, args: Record<string, unknown> = {}) {
     try {
       await call(name, args);
@@ -903,27 +922,48 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
   const textContent = session?.layer === "tabs" && presentation(session, config.layout) === "text";
   const listLayout = config.layout === "list" || textContent;
   const desktopGrid = session?.layer === "desktops" && config.layout === "grid";
+  // Hint input filters targets, but keeps the full held-session canvas. Hidden
+  // cards retain their slots and scroll extent so the remaining previews stay put.
+  const layoutWindows = session?.mode === "held" ? localWindows : visible;
   // Selection and search update the session frequently; collision avoidance
   // depends only on the full inventory and its geometry.
-  const overviewKey=panel ? JSON.stringify([panel,localWindows.map(w=>[w.id,w.bounds,w.desktopId,w.hidden,w.minimized]),session?.spatialIds,session?.desktops]) : null;
-  const overviewLayout=useMemo(()=>panel ? desktopOverviewTiles(panel,localWindows,available.width,available.height,stacked,session?.spatialIds ?? [],session?.desktops) : undefined,[overviewKey,available,stacked]);
-  const tiles: {columns:number; tiles:(Tile | undefined)[]; regions?:DesktopAnchor[]} = useMemo(() => panel ? (() => {
+  const overviewKey=panel ? JSON.stringify([panel,localWindows.map(w=>[w.id,w.bounds,w.desktopId,w.hidden,w.minimized]),[...(session?.spatialIds ?? [])].sort(),session?.desktops]) : null;
+  const overviewLayout=useMemo(()=>panel ? overviewCache.current(panel,localWindows,available.width,available.height,stacked,session?.spatialIds ?? [],session?.desktops) : undefined,[overviewKey,available,stacked]);
+  const layout: {columns:number; tiles:(Tile | undefined)[]; regions?:DesktopAnchor[]} = useMemo(() => panel ? (() => {
     const all=overviewLayout!;
-    return {...all,tiles:visible.map(w=>all.tiles[localWindows.findIndex(a=>a.id===w.id)])};
+    return {...all,tiles:layoutWindows.map(w=>all.tiles[localWindows.findIndex(a=>a.id===w.id)])};
   })() : desktopGrid ? (() => {
-    const columns = Math.max(1, Math.min(3, visible.length, Math.floor(available.width / 260)));
+    const columns = Math.max(1, Math.min(3, layoutWindows.length, Math.floor(available.width / 260)));
     const width = Math.max(0, (available.width - (columns - 1) * 14) / columns);
     const height = width * 9 / 16 + 48;
-    return {columns, tiles: visible.map((_,i) => ({x:(i % columns) * (width + 14), y:Math.floor(i / columns) * (height + 14), width, height, preview:height - 48, meta:48}))};
+    return {columns, tiles: layoutWindows.map((_,i) => ({x:(i % columns) * (width + 14), y:Math.floor(i / columns) * (height + 14), width, height, preview:height - 48, meta:48}))};
   })() : contentLayer && listLayout
-    ? textRows(visible, available.width)
-    : tileWindows(visible, available.width, available.height, listLayout, session?.layer === "tabs"), [session, available, listLayout, contentLayer, desktopGrid, stacked, overviewLayout]);
-  const desktopRegions = (tiles.regions ?? []).map(region=>({...region,labelWindowId:visible
-    .map((w,i)=>({id:w.id,tile:tiles.tiles[i]})).filter(w=>region.ids.includes(w.id)&&w.tile)
+    ? textRows(layoutWindows, available.width)
+    : tileWindows(layoutWindows, available.width, available.height, listLayout, session?.layer === "tabs"), [session, available, listLayout, contentLayer, desktopGrid, stacked, overviewLayout]);
+  const tiles = {...layout, tiles: visible.map(w => layout.tiles[layoutWindows.findIndex(a => a.id === w.id)])};
+  useLayoutEffect(() => {
+    if (!native || !frame || !session || session.mode === "inactive" || !participating
+      || frame.session.sessionId !== session.sessionId || session.revision < frame.session.revision) return;
+    const canvas = list.current;
+    if (!canvas || available.width <= 0 || available.height <= 0
+      || available.width !== Math.max(0, canvas.clientWidth - 28)
+      || available.height !== Math.max(0, canvas.clientHeight - 28)
+      || Math.abs(innerWidth - frame.width) > 1 || Math.abs(innerHeight - frame.height) > 1
+      || visible.some((_, i) => !tiles.tiles[i])) return;
+    // Flush the final DOM layout before acknowledging it. Hidden native WebViews
+    // can suspend rAF, so the commit acknowledgement uses the next task instead.
+    canvas.getBoundingClientRect();
+    const timer = setTimeout(() => {
+      call("panel_ready", {generation: frame.generation}).catch(e => setError(String(e)));
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [frame, session, participating, available, tiles]);
+  const desktopRegions = (layout.regions ?? []).map(region=>({...region,labelWindowId:layoutWindows
+    .map((w,i)=>({id:w.id,tile:layout.tiles[i]})).filter(w=>region.ids.includes(w.id)&&w.tile)
     .sort((a,b)=>a.tile!.y-b.tile!.y||a.tile!.x-b.tile!.x)[0]?.id}));
   const localSession = session ? {...session, windows: [...new Map([...localWindows, ...spatialWindows].map(w => [w.id,w])).values()]} : undefined;
   const images = usePreviews(localSession, participating && config.thumbnails && (!listLayout || !!panel) && (!!panel || contentLayer || !windowsNative));
-  useEffect(()=>{ if ((panel || contentLayer) && session?.selected) document.getElementById("window-"+session.selected)?.scrollIntoView({block:"nearest"}); },[session?.selected,contentLayer,tiles]);
+  useEffect(()=>{ if ((panel || contentLayer) && session?.selected && !session.prefix) document.getElementById("window-"+session.selected)?.scrollIntoView({block:"nearest"}); },[session?.sessionId,session?.selected,contentLayer,available.width,available.height]);
   useEffect(() => setInspected(null), [session?.sessionId, session?.selected]);
   const lastSelection = useRef<{sessionId:number; at:number}>();
   useLayoutEffect(() => {
@@ -1031,12 +1071,11 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
             />
           ) : (
             <>
-              <h1>{layerName}</h1>
-              {session?.prefix && <kbd>{session.prefix}</kbd>}
+              <h1>{layerName}{session?.prefix && <kbd className="hint-prefix">{session.prefix}</kbd>}</h1>
             </>
           )}
         </div>
-        {panel && <button className="icon-button" title={t("Original stack")} aria-label={t("Original stack")} aria-pressed={stacked} onClick={()=>setStacked(v=>!v)}><Icon name="layers" /></button>}
+        {panel && <button className="icon-button" title={t("Original stack")} aria-label={t("Original stack")} aria-pressed={stacked} onClick={()=>setStack({sessionId:session?.sessionId,mode:session?.mode,value:!stacked})}><Icon name="layers" /></button>}
         <span className="count">{visible.length}</span>
         <button
           className="icon-button"
@@ -1057,7 +1096,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
           {error || session?.error}
         </div>
       )}
-      {!isSearch && visible.some(w => !w.hint) && <div className="switcher-warning">
+      {!isSearch && layoutWindows.some(w => !w.hint) && <div className="switcher-warning">
         {t("No hint? Use arrows, search or click.")}
       </div>}
       {session?.warnings.map((w) => (
@@ -1086,7 +1125,7 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
           highlighted={inspected ?? session?.selected ?? null} width={available.width} height={available.height}
           tile={tiles.tiles[visible.findIndex(w=>w.id===(inspected ?? session?.selected))]}
           zh={zh} />}
-        {visible.map((w, index) => (
+        {layoutWindows.map((w, index) => (
           <WindowCard
             key={`${session?.sessionId}:${w.id}`}
             window={w}
@@ -1094,12 +1133,15 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
             desktopPreview={desktopGrid ? session?.desktopPreviews?.[w.id] : undefined}
             desktopImages={images}
             desktop={desktopRegions.find(region=>region.labelWindowId===w.id)}
-            tile={tiles.tiles[index]}
+            tile={layout.tiles[index]}
+            filtered={!session?.resultIds.includes(w.id)}
             depth={panel ? (session?.spatialIds?.includes(w.id) ? session.spatialIds.length - session.spatialIds.indexOf(w.id) : 1) : undefined}
             nativeStack={session?.spatialIds?.includes(w.id)}
+            stacked={panel ? stacked : undefined}
             selected={w.id === session?.selected}
             departure={w.id === session?.origin?.id}
             hintStyle={config.hintStyle}
+            prefix={session?.prefix ?? ""}
             thumbnails={config.thumbnails && (!listLayout || !!panel) && !w.desktopTarget}
             textContent={textContent}
             sessionId={session?.sessionId ?? 0}
@@ -1115,12 +1157,12 @@ function Switcher({ config, zh }: { config: Config; zh: boolean }) {
           <div className="empty">
             <span className="empty-icon"><Icon name="search" size={30} /></span>
             <h2>
-              {session?.loading ? t("Loading targets…") : query
+              {session?.searching ? t("Searching files…", "正在搜索文件…") : session?.loading ? t("Loading targets…") : query
                 ? (contentLayer ? t("No matching targets") : t("No matching windows"))
                 : (contentLayer ? t("No targets in this window") : t("Nothing in view yet"))}
             </h2>
             <p>
-              {session?.loading ? t("Esc cancels") : contentLayer ? t("Check the plugin connection or try another search.") : query
+              {session?.loading || session?.searching ? t("Esc cancels") : contentLayer ? t("Check the plugin connection or try another search.") : query
                 ? t("Try another title or app name.")
                 : t("Open a window, or check your scope and Accessibility settings.")}
             </p>
@@ -1181,11 +1223,14 @@ function WindowCard({
   tile,
   depth,
   nativeStack,
+  filtered,
+  stacked,
   selected,
   departure,
   thumbnails,
   textContent,
   hintStyle,
+  prefix,
   sessionId,
   search,
   onSelect,
@@ -1200,37 +1245,46 @@ function WindowCard({
   tile?: Tile;
   depth?: number;
   nativeStack?: boolean;
+  filtered: boolean;
+  stacked?: boolean;
   selected: boolean;
   departure: boolean;
   thumbnails: boolean;
   textContent: boolean;
   hintStyle: Config["hintStyle"];
+  prefix: string;
   sessionId: number;
   search: boolean;
   onSelect: () => void;
   onInspect?: (id: string | null) => void;
   zh: boolean;
 }) {
+  const remainingHint = w.hint.startsWith(prefix) ? w.hint.slice(prefix.length) : w.hint;
   const title = w.desktopTarget && zh && w.desktopLabel
     ? `${w.desktopLabel.fullScreen ? "全屏空间" : "桌面"} ${w.desktopLabel.number}` : w.title;
   const appName = w.desktopTarget ? (translate(zh, "Desktop")) : w.appName;
   const previewArea = useRef<HTMLDivElement>(null);
   const element = useRef<HTMLButtonElement>(null);
   const previousTile = useRef<Tile>();
+  const previousStack = useRef(stacked);
   useLayoutEffect(() => {
-    const node=element.current, from=previousTile.current ?? tile?.origin;
+    // Opening should land directly on the final layout. Only an explicit
+    // in-session geometry change (e.g. Original stack) animates between tiles.
+    const node=element.current, from=previousTile.current;
+    const toggled = previousStack.current !== stacked;
+    previousStack.current=stacked;
     previousTile.current=tile;
-    if(depth === undefined || !node || !tile || !from || !tile.width || !tile.height || matchMedia("(prefers-reduced-motion: reduce)").matches)return;
+    if(!toggled || depth === undefined || !node || !tile || !from || !tile.width || !tile.height || matchMedia("(prefers-reduced-motion: reduce)").matches)return;
     if(from.x===tile.x && from.y===tile.y && from.width===tile.width && from.height===tile.height)return;
     const animation=node.animate([
       {transformOrigin:"0 0",transform:`translate(${from.x-tile.x}px, ${from.y-tile.y}px) scale(${from.width/tile.width}, ${from.height/tile.height})`,filter:"brightness(.8)"},
       {transformOrigin:"0 0",transform:"none",filter:"brightness(1)"},
     ],{duration:320,easing:"cubic-bezier(.2,.7,.25,1)"});
     return ()=>animation.cancel();
-  },[tile?.x,tile?.y,tile?.width,tile?.height,depth]);
+  },[tile?.x,tile?.y,tile?.width,tile?.height,depth,stacked]);
 
   useEffect(() => {
-    if (!windowsNative || w.content || !thumbnails || !previewArea.current) return;
+    if (!windowsNative || w.content || !thumbnails || filtered || !previewArea.current) return;
     const node = previewArea.current;
     let frame = 0;
     let alive = true;
@@ -1282,16 +1336,18 @@ function WindowCard({
         () => {},
       );
     };
-  }, [w.id, sessionId, thumbnails, search, selected, departure, depth, tile?.x, tile?.y, tile?.width, tile?.height]);
+  }, [w.id, sessionId, thumbnails, filtered, search, selected, departure, depth, tile?.x, tile?.y, tile?.width, tile?.height]);
   return (
     <button
       ref={element}
       id={"window-" + w.id}
       role="option"
+      aria-hidden={filtered || undefined}
+      tabIndex={filtered ? -1 : undefined}
       aria-selected={selected}
       data-origin={departure || undefined}
       className={"window-card " + (depth !== undefined ? "spatial-card " : "") + (selected ? "selected " : "") + (departure ? "departure " : "") + (tile && tile.meta < 40 ? "dense" : "")}
-      style={tile ? { zIndex: depth, left: tile.x + 14, top: tile.y + 14, width: tile.width, height: tile.height,
+      style={tile ? { visibility: filtered ? "hidden" : undefined, zIndex: depth, left: tile.x + 14, top: tile.y + 14, width: tile.width, height: tile.height,
         "--tile-preview": `${tile.preview}px`, "--tile-meta": `${tile.meta}px`,
         "--hint-size": `${Math.max(8, Math.min(
           (tile.preview - 2 * hintStyle.borderWidth - 12) / 1.55,
@@ -1324,7 +1380,7 @@ function WindowCard({
             <small>{w.content ? (translate(zh, "No preview")) : appName}</small>
           </div>
         )}
-        {!search && w.hint && <kbd className="window-hint hint-badge" style={hintVariables(hintStyle)}>{w.hint.replaceAll(" ", "␣")}</kbd>}
+        {!search && remainingHint && <kbd className="window-hint hint-badge" style={hintVariables(hintStyle)}>{remainingHint.replaceAll(" ", "␣")}</kbd>}
         {depth !== undefined && (search || !w.hint) && (selected || departure) && <span className="window-focus-marker hint-badge" style={hintVariables(hintStyle)} aria-hidden="true">{selected ? "↵" : "●"}</span>}
         {w.minimized && (
           <span className="window-state">{"−"}</span>

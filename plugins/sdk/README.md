@@ -75,6 +75,10 @@ Discovery uses `~/.beaconhop/plugins` (`%USERPROFILE%\.beaconhop\plugins` on Win
 
 The SDK rejects invalid manifests, duplicate IDs, ambiguous focus, unverified activation, oversized frames and invalid images. Limits: 256 contexts, 2,000 items per context, 1 MiB per message and eight concurrent connections. A provider ID represents one adapter family, not an author authentication mechanism. Only install application extensions you trust. There is no remote package downloader, background executable launcher, marketplace, signature/update service, or npm publication in this version.
 
+## Optional workspace search
+
+Advertise `capabilities: ['search']` and provide `search({context, query}, {signal})` returning a single `Context`. Search queries are bound to the context captured by `list`; it is normal for that context to report `focused:false` while BeaconHop has keyboard focus. Return matched, ranked targets within the inventory and frame limits, and accept their IDs through the existing verified `activate` handler. Queries are at most 8,192 characters. The SDK rejects replies for another context. Older adapters keep using local filtering of the list inventory.
+
 ## Verify and package
 
 From the BH repository run `npm run test:plugins`, `npm run plugins:prepare`, and package VS Code with `npx @vscode/vsce package` inside `plugins/vscode`. Its `vscode:prepublish` step bundles the same SDK source. `plugins/vscode/test/integration.cjs` runs against the real VS Code extension development host. SDK tests exercise sockets, stale contexts, authentication, framing, cancellation, registry lifecycle and the scaffold.

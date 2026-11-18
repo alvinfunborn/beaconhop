@@ -45,6 +45,10 @@ struct HintExtension {
     requested: Option<Continuation>,
 }
 pub struct Engine {
+    pub content_search: Option<crate::plugins::SearchContext>,
+    content_search_requested: Option<(u64, String)>,
+    content_search_serial: u64,
+    content_search_completed: Option<String>,
     pub config: Config,
     pub snapshot: Snapshot,
     pub session: Session,
@@ -79,6 +83,10 @@ impl Engine {
     }
     pub fn new(config: Config) -> Self {
         Self {
+            content_search: None,
+            content_search_requested: None,
+            content_search_serial: 0,
+            content_search_completed: None,
             config,
             snapshot: Snapshot::default(),
             session: Session::default(),
@@ -373,6 +381,9 @@ impl Engine {
         target: Option<Destination>,
     ) -> Vec<Action> {
         self.clear_extension();
+        self.content_search = None;
+        self.content_search_requested = None;
+        self.content_search_completed = None;
         self.serial += 1;
         let desktop_filter = target
             .as_ref()
@@ -616,6 +627,7 @@ impl Engine {
             layer,
             sticky,
             loading: layer == Layer::Tabs,
+            searching: false,
             desktop_filter,
             windows: items,
             desktop_previews,
@@ -716,6 +728,10 @@ impl Engine {
                 if !w.hint.starts_with(&self.session.prefix) {
                     return None;
                 }
+                if self.session.mode == Mode::Search && self.content_search.is_some() {
+                    return (self.content_search_completed.as_ref() == Some(&self.session.query))
+                        .then_some(w);
+                }
                 self.search_index
                     .get(&w.window.id)
                     .map_or_else(
@@ -749,6 +765,80 @@ impl Engine {
             })
             .collect()
     }
+    pub fn content_search_request(
+        &mut self,
+    ) -> Option<(u64, u64, String, crate::plugins::SearchContext)> {
+        if self.session.mode != Mode::Search
+            || self.session.layer != Layer::Tabs
+            || self.session.loading
+        {
+            return None;
+        }
+        let context = self.content_search.clone()?;
+        if self
+            .content_search_requested
+            .as_ref()
+            .map(|(_, query)| query)
+            == Some(&self.session.query)
+        {
+            return None;
+        }
+        let query = self.session.query.clone();
+        self.content_search_serial += 1;
+        self.content_search_requested = Some((self.content_search_serial, query.clone()));
+        self.content_search_completed = None;
+        self.session.searching = true;
+        self.session.windows.clear();
+        self.session.selected = None;
+        self.session.error = None;
+        self.search_index.clear();
+        self.navigation.clear();
+        self.session.revision += 1;
+        Some((
+            self.session.session_id,
+            self.content_search_serial,
+            query,
+            context,
+        ))
+    }
+    pub fn content_search_current(&self, session_id: u64, request_id: u64, query: &str) -> bool {
+        self.session.session_id == session_id
+            && self.session.mode == Mode::Search
+            && self.session.layer == Layer::Tabs
+            && self.session.query == query
+            && self
+                .content_search_requested
+                .as_ref()
+                .is_some_and(|(id, text)| *id == request_id && text == query)
+    }
+    pub fn content_search_loaded(
+        &mut self,
+        session_id: u64,
+        request_id: u64,
+        query: &str,
+        result: Result<Vec<Destination>, String>,
+    ) -> Vec<Action> {
+        if !self.content_search_current(session_id, request_id, query) {
+            return vec![];
+        }
+        self.content_search_completed = Some(query.into());
+        self.session.searching = false;
+        match result {
+            Ok(items) => {
+                self.session.windows = items
+                    .into_iter()
+                    .map(|window| HintWindow {
+                        window,
+                        hint: String::new(),
+                    })
+                    .collect();
+                self.session.selected = self.results().first().map(|w| w.window.id.clone());
+            }
+            Err(error) => self.session.error = Some(error),
+        }
+        self.session.revision += 1;
+        vec![Action::Show, Action::Publish]
+    }
     pub fn search(&mut self, query: String) {
         self.session.query = query;
         self.session.prefix.clear();
@@ -757,6 +847,12 @@ impl Engine {
         self.session.revision += 1;
     }
     pub fn activate(&mut self, id: Option<&str>) -> Vec<Action> {
+        if self.session.mode == Mode::Search
+            && self.content_search.is_some()
+            && self.content_search_completed.as_ref() != Some(&self.session.query)
+        {
+            return vec![];
+        }
         if self.session.loading {
             self.commit_on_load = true;
             return vec![];

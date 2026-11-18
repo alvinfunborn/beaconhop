@@ -33,8 +33,10 @@ test(`browser adapter and actual native host (${lineEnding === '\n' ? 'LF' : 'CR
     chrome.runtime.onMessage=event();
     const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO9sAAAAASUVORK5CYII=','base64');
     chrome.runtime.getURL=p=>'chrome-extension://test'+p;
+    let releaseIcons;
+    const iconReady=new Promise(resolve=>{releaseIcons=resolve;});
     const background=(await fs.readFile('plugins/browser/background.js','utf8')).replace(/\r?\n/g,lineEnding);
-    vm.runInNewContext(background.replace(/^import [^\r\n]*\r?\n/,''),{chrome,createPreviews,navigator:{userAgent:'Chrome/155'},console,URL,AbortSignal,btoa,fetch:async url=>{assert.equal(url.protocol,'chrome-extension:');return {ok:true,arrayBuffer:async()=>png};}});
+    vm.runInNewContext(background.replace(/^import [^\r\n]*\r?\n/,''),{chrome,createPreviews,navigator:{userAgent:'Chrome/155'},console,URL,AbortSignal,btoa,fetch:async url=>{assert.equal(url.protocol,'chrome-extension:');await iconReady;return {ok:true,arrayBuffer:async()=>png};}});
     let endpoint;for(let i=0;i<100&&!endpoint;i++){const filename=(await fs.readdir(directory)).find(f=>f.endsWith('.json'));if(filename)endpoint=JSON.parse(await fs.readFile(path.join(directory,filename),'utf8'));else await new Promise(r=>setTimeout(r,20));}
     assert(endpoint,`No host endpoint: ${stderr}`);
     assert.deepEqual(endpoint.capabilities,['thumbnails']);
@@ -42,7 +44,11 @@ test(`browser adapter and actual native host (${lineEnding === '\n' ? 'LF' : 'CR
     const result=await rpc('list');assert.equal(result.result.contexts.length,2);assert.equal(result.result.contexts[0].focused,true);
     assert.deepEqual((await rpc('thumbnails',{context:'10',items:[{id:'1',url:'https://one.test'}]})).result,{context:'10',items:[]});
     assert.deepEqual(result.result.contexts[0].items.map(t=>t.id),['1','2']);assert.equal(result.result.contexts[0].items[1].title,'重名');
-    assert.match(result.result.contexts[0].items[0].icon,/^data:image\/png;base64,/);
+    // Inventory must finish even when every favicon read is still blocked.
+    assert.equal(result.result.contexts[0].items[0].icon,undefined);
+    releaseIcons();
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.match((await rpc('list')).result.contexts[0].items[0].icon,/^data:image\/png;base64,/);
     assert.equal((await rpc('list',{},endpoint.token,100)).result.contexts.length,2);
     assert.equal((await rpc('activate',{context:'10',item:'1'},endpoint.token,100)).result.verified,true);
     assert.equal((await rpc('activate',{context:'10',item:'2'})).result.verified,true);assert(tabs[1].active);

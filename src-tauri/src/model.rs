@@ -158,6 +158,7 @@ pub struct Session {
     pub layer: Layer,
     pub sticky: bool,
     pub loading: bool,
+    pub searching: bool,
     pub desktop_filter: Option<String>,
     pub windows: Vec<HintWindow>,
     pub desktop_previews: std::collections::HashMap<String, DesktopPreview>,

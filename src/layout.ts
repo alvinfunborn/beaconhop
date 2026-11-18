@@ -39,13 +39,16 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
       if(w>width||h>height)return null;
       const clamp=(x:number,y:number)=>({x:Math.max(0,Math.min(width-w,x)),y:Math.max(0,Math.min(height-h,y))});
       const guide=guides[index],flow=strategy.startsWith("flow");
+      const compact=strategy.startsWith("compact"),fitStrategy=strategy.startsWith("fit"),short=strategy.startsWith("short"),contact=strategy.startsWith("contact"),edgeStrategy=strategy.startsWith("edge");
       const own=guide ? placed.filter(p=>guides[p.index].group===guide.group) : [];
       const lastInGroup=guide && !order.slice(order.indexOf(index)+1).some(i=>guides[i].group===guide.group);
       const previousRank=guide ? Math.max(-1,...placed.map(p=>guides[p.index].rank).filter(rank=>rank<guide.rank)) : -1;
       const previous=guide ? placed.filter(p=>guides[p.index].rank===previousRank) : [];
       const origin=clamp(a.x-w/2,a.y-h/2);
       const candidates=[origin,clamp(0,0),clamp(width-w,0),clamp(0,height-h),clamp(width-w,height-h)];
-      for(const p of placed) {
+      // Guided layouts already enumerate maximal free rectangles below. Their
+      // corners cover neighbour edges without twelve extra candidates per card.
+      for(const p of guide ? [] : placed) {
         for(const x of [p.x-w-gap,p.x+p.width+gap])for(const y of [origin.y,p.y,p.y+p.height-h])candidates.push(clamp(x,y));
         for(const y of [p.y-h-gap,p.y+p.height+gap])for(const x of [origin.x,p.x,p.x+p.width-w])candidates.push(clamp(x,y));
       }
@@ -77,11 +80,16 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
         }
       }
       let best: {x:number;y:number}|null=null,score=Infinity;
-      const extent=placed.length ? {
+      const extent=compact && placed.length ? {
         left:Math.min(...placed.map(p=>p.x)),top:Math.min(...placed.map(p=>p.y)),
         right:Math.max(...placed.map(p=>p.x+p.width)),bottom:Math.max(...placed.map(p=>p.y+p.height)),
       } : undefined;
+      const seen=new Map<number,Set<number>>();
       for(const c of candidates) {
+        let ys=seen.get(c.x);
+        if(ys?.has(c.y))continue;
+        if(!ys)seen.set(c.x,ys=new Set());
+        ys.add(c.y);
         if(placed.some(p=>c.x < p.x+p.width+gap-.1 && c.x+w+gap-.1 > p.x && c.y < p.y+p.height+gap-.1 && c.y+h+gap-.1 > p.y))continue;
         const home=guides[index]?.home,cx=c.x+w/2,cy=c.y+h/2;
         // Desktops constrain relative center order, never a fixed rectangle.
@@ -101,20 +109,22 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
           *(Math.max(extent.bottom,c.y+h)-Math.min(extent.top,c.y))/(width*height) : 0;
         // Prefer tight free rectangles and their corners, rather than leaving
         // unusable strips around a card centered inside a large empty region.
-        const fit=strategy.startsWith('fit') ? Math.min(...free.filter(f=>c.x>=f.x-.1 && c.y>=f.y-.1
-          && c.x+w<=f.x+f.width+.1 && c.y+h<=f.y+f.height+.1).map(f=>
-            (f.width*f.height-w*h)/(width*height)
-            +(Math.min(c.x-f.x,f.x+f.width-c.x-w)+Math.min(c.y-f.y,f.y+f.height-c.y-h))/Math.max(width,height))) : 0;
+        let fit=0,shortSide=0;
+        if(fitStrategy||short){
+          fit=Infinity;shortSide=Infinity;
+          for(const f of free){
+            if(c.x<f.x-.1 || c.y<f.y-.1 || c.x+w>f.x+f.width+.1 || c.y+h>f.y+f.height+.1)continue;
+            const corner=(Math.min(c.x-f.x,f.x+f.width-c.x-w)+Math.min(c.y-f.y,f.y+f.height-c.y-h))/Math.max(width,height);
+            if(fitStrategy)fit=Math.min(fit,(f.width*f.height-w*h)/(width*height)+corner);
+            else shortSide=Math.min(shortSide,Math.min(f.width-w,f.height-h)/Math.max(width,height)+corner);
+          }
+        }
         const edge = (c.y+h)/height + c.x/width*.05;
-        const shortSide=strategy.startsWith('short') ? Math.min(...free.filter(f=>c.x>=f.x-.1 && c.y>=f.y-.1
-          && c.x+w<=f.x+f.width+.1 && c.y+h<=f.y+f.height+.1).map(f=>
-          Math.min(f.width-w,f.height-h)/Math.max(width,height)
-          +(Math.min(c.x-f.x,f.x+f.width-c.x-w)+Math.min(c.y-f.y,f.y+f.height-c.y-h))/Math.max(width,height))) : 0;
-        const touch=strategy.startsWith('contact') ? placed.reduce((sum,p)=>sum
+        const touch=contact ? placed.reduce((sum,p)=>sum
           +(Math.abs(c.x-p.x-p.width-gap)<.2||Math.abs(c.x+w+gap-p.x)<.2 ? Math.max(0,Math.min(c.y+h,p.y+p.height)-Math.max(c.y,p.y)):0)
           +(Math.abs(c.y-p.y-p.height-gap)<.2||Math.abs(c.y+h+gap-p.y)<.2 ? Math.max(0,Math.min(c.x+w,p.x+p.width)-Math.max(c.x,p.x)):0),
           (c.x<.1||c.x+w>width-.1?h:0)+(c.y<.1||c.y+h>height-.1?w:0))/(width+height) : 0;
-        const cost=flow ? (c.x+w)/width + c.y/height*0.5 + distance*.005 : strategy.startsWith('contact') ? -touch+distance*.01 : strategy.startsWith('short') ? shortSide+distance*.01 : strategy.startsWith('edge') ? edge+distance*.005 : strategy.startsWith('fit') ? fit+distance*.02 : strategy.startsWith('compact') ? footprint+distance*.25 : distance;
+        const cost=flow ? (c.x+w)/width + c.y/height*0.5 + distance*.005 : contact ? -touch+distance*.01 : short ? shortSide+distance*.01 : edgeStrategy ? edge+distance*.005 : fitStrategy ? fit+distance*.02 : compact ? footprint+distance*.25 : distance;
         if(cost<score){best=c;score=cost;}
       }
       if(!best)return null;
@@ -144,7 +154,9 @@ export function overviewTiles(panel: OverviewPanel, windows: Destination[], widt
       || (strategy.endsWith('x') ? anchors[a].x-anchors[b].x : strategy.endsWith('y') ? anchors[a].y-anchors[b].y
         : strategy.endsWith('height') ? anchors[b].height-anchors[a].height : strategy.endsWith('width') ? anchors[b].width-anchors[a].width : (strategy.endsWith('small') ? -1 : 1)*(anchors[b].width*anchors[b].height-anchors[a].width*anchors[a].height)) || a-b);
     let low=0,high=guides.length ? Math.min(...anchors.map(a=>Math.min(width/a.width,(height-caption)/a.height))) : 1,candidate:Tile[]=[];
-    for(let i=0;i<14;i++) {
+    // Ten steps resolve scale to about one screen pixel; extra subpixel probes
+    // repeat the expensive collision pass without a visible size improvement.
+    for(let i=0;i<10;i++) {
       const middle=(low+high)/2,result=pack(middle,strategy);
       if(result){low=middle;candidate=result;}else high=middle;
     }

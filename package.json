@@ -1,6 +1,6 @@
 {
   "name": "beaconhop",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -15,8 +15,8 @@
     "test:browser": "cargo build --manifest-path src-tauri/Cargo.toml && node --test scripts/test-browser-plugin.mjs scripts/test-browser-previews.mjs",
     "icons": "node scripts/icons.mjs",
     "check:version": "node scripts/check-version.mjs",
-    "plugins:prepare": "node scripts/sync-plugin-sdk.mjs",
-    "test:plugins": "node --test plugins/sdk/test/sdk.cjs",
+    "plugins:prepare": "node scripts/sync-plugin-sdk.mjs && node scripts/sync-plugin-icons.mjs",
+    "test:plugins": "node --test plugins/sdk/test/sdk.cjs plugins/vscode/test/files.cjs",
     "test:plugin-manager": "cargo build --manifest-path src-tauri/Cargo.toml && node --test scripts/test-plugin-manager.mjs",
     "plugins:bundle": "node scripts/bundle-plugins.mjs",
     "plugins:check-release": "node scripts/bundle-plugins.mjs --require-store",

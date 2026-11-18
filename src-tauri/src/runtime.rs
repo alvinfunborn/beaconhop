@@ -23,6 +23,7 @@ struct Runtime {
     previews: Mutex<HashMap<String, (Instant, String)>>,
     capture: Mutex<()>,
     inventory: Mutex<()>,
+    presentation: Mutex<crate::presentation::Presentation>,
     config_warning: Mutex<Option<String>>,
 }
 static RECORDING: AtomicBool = AtomicBool::new(false);
@@ -120,6 +121,7 @@ pub fn init(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         previews: Mutex::new(HashMap::new()),
         capture: Mutex::new(()),
         inventory: Mutex::new(()),
+        presentation: Mutex::new(crate::presentation::Presentation::default()),
         config_warning: Mutex::new(config_error.clone()),
     });
     RUNTIME
@@ -291,7 +293,22 @@ fn show(search: bool) {
                 log::warn!("Could not save overview positions: {error}");
             }
         }
-        if let Err(error) = crate::overview_windows::show(&rt().app, &session.overview, search) {
+        if let Err(error) =
+            crate::overview_windows::prepare(&rt().app, &session.overview).and_then(|windows| {
+                let panels = windows
+                    .into_iter()
+                    .zip(&session.overview)
+                    .map(|(window, panel)| {
+                        let scale = crate::overview::coordinate_scale(&panel.display);
+                        (
+                            window,
+                            (panel.bounds.width / scale, panel.bounds.height / scale),
+                        )
+                    })
+                    .collect();
+                prepare_presentation(panels, search)
+            })
+        {
             log::error!("Could not show all display overviews: {error}");
             let actions = rt().engine.lock().unwrap().cancel();
             dispatch(actions);
@@ -304,6 +321,12 @@ fn show(search: bool) {
             let _ = other.hide();
         }
     }
+    let mut desired_size = window
+        .inner_size()
+        .ok()
+        .map(|size| size.to_logical::<f64>(window.scale_factor().unwrap_or(1.)))
+        .map(|size| (size.width, size.height))
+        .unwrap_or((1000., 640.));
     if let Some(display) = session.display {
         let b = display.bounds;
         #[cfg(target_os = "macos")]
@@ -337,6 +360,7 @@ fn show(search: bool) {
                 session.warnings.len().min(3) as f64 * 36.,
             )
         };
+        desired_size = (width, height);
         let (width, height) = (width * scale, height * scale);
         #[cfg(target_os = "macos")]
         {
@@ -355,9 +379,102 @@ fn show(search: bool) {
             ));
         }
     }
-    platform::show_panel(&window, search);
+    if let Err(error) = prepare_presentation(vec![(window, desired_size)], search) {
+        log::warn!("Could not prepare panel: {error}");
+    }
+}
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelPresentation {
+    label: String,
+    generation: u64,
+    width: f64,
+    height: f64,
+    session: Session,
+}
+fn prepare_presentation(
+    windows: Vec<(tauri::WebviewWindow, (f64, f64))>,
+    search: bool,
+) -> tauri::Result<()> {
+    // set_size / per-monitor scale changes are asynchronous. Reading inner_size
+    // here can return the previous viewport; use the geometry we requested.
+    let panels = windows
+        .iter()
+        .map(|(window, (width, height))| (window.label().to_string(), (*width, *height, false)))
+        .collect();
+    let session = current_session();
+    if session.mode == Mode::Inactive {
+        return Ok(());
+    }
+    rt().presentation
+        .lock()
+        .unwrap()
+        .begin(session.session_id, search, panels);
+    for (window, _) in windows {
+        #[cfg(target_os = "macos")]
+        platform::prepare_panel(&window);
+        if let Some(frame) = get_panel_presentation(window.clone()) {
+            window.emit_to(window.label(), "panel-presentation", frame)?;
+        }
+    }
+    Ok(())
+}
+#[tauri::command]
+pub fn get_panel_presentation(window: tauri::WebviewWindow) -> Option<PanelPresentation> {
+    let session = current_session();
+    let p = rt().presentation.lock().unwrap();
+    if session.mode == Mode::Inactive || session.session_id != p.session_id {
+        return None;
+    }
+    let &(width, height, _) = p.panels.get(window.label())?;
+    Some(PanelPresentation {
+        label: window.label().to_string(),
+        generation: p.generation,
+        width,
+        height,
+        session,
+    })
+}
+#[tauri::command]
+pub fn panel_ready(window: tauri::WebviewWindow, generation: u64) {
+    // Run the validation and exposure together on the native UI queue. A late
+    // acknowledgement must never reopen a dismissed or superseded session.
+    let label = window.label().to_string();
+    let _ = rt().app.run_on_main_thread(move || {
+        let e = rt().engine.lock().unwrap();
+        let mut p = rt().presentation.lock().unwrap();
+        if e.session.mode == Mode::Inactive
+            || e.session.session_id != p.session_id
+            || !p.ready(generation, &label)
+        {
+            return;
+        }
+        log::info!(
+            "Panel layout committed: session={} generation={} panels={} elapsed_ms={}",
+            p.session_id,
+            p.generation,
+            p.panels.len(),
+            p.started.map_or(0, |t| t.elapsed().as_millis())
+        );
+        let search = p.search && e.session.mode == Mode::Search;
+        let labels: Vec<_> = p.panels.keys().cloned().collect();
+        p.panels.clear();
+        drop(p);
+        drop(e);
+        for label in &labels {
+            if let Some(window) = rt().app.get_webview_window(label) {
+                platform::show_panel(&window, false);
+            }
+        }
+        if search {
+            if let Some(window) = rt().app.get_webview_window("switcher") {
+                platform::show_panel(&window, true);
+            }
+        }
+    });
 }
 fn hide() {
+    rt().presentation.lock().unwrap().panels.clear();
     crate::overview_windows::hide(&rt().app);
 }
 fn perform(action: Action) {
@@ -366,7 +483,30 @@ fn perform(action: Action) {
         Action::Record(shortcut) => {
             let _ = rt().app.emit("shortcut-recorded", shortcut);
         }
-        Action::Publish => publish(),
+        Action::Publish => {
+            let job = rt().engine.lock().unwrap().content_search_request();
+            publish();
+            if let Some((session_id, request_id, query, context)) = job {
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(120));
+                    if !rt()
+                        .engine
+                        .lock()
+                        .unwrap()
+                        .content_search_current(session_id, request_id, &query)
+                    {
+                        return;
+                    }
+                    let result = context.search(&query);
+                    let actions = rt()
+                        .engine
+                        .lock()
+                        .unwrap()
+                        .content_search_loaded(session_id, request_id, &query, result);
+                    dispatch(actions);
+                });
+            }
+        }
         Action::Show => {
             let search = rt().engine.lock().unwrap().session.mode == Mode::Search;
             show(search);
@@ -403,7 +543,7 @@ fn perform(action: Action) {
                 };
                 if let Err(error) = &result {
                     log::warn!("Tab inventory failed for {}: {error}", origin.app_id);
-                } else if let Ok(items) = &result {
+                } else if let Ok((items, _)) = &result {
                     log::info!(
                         "Tab inventory ready: session={session_id} app={} count={} elapsed_ms={}",
                         origin.app_id,
@@ -425,7 +565,13 @@ fn perform(action: Action) {
                     dispatch(actions);
                     return;
                 }
-                let actions = rt().engine.lock().unwrap().tabs_loaded(session_id, result);
+                let mut e = rt().engine.lock().unwrap();
+                let result = result.map(|(items, search)| {
+                    e.content_search = search;
+                    items
+                });
+                let actions = e.tabs_loaded(session_id, result);
+                drop(e);
                 dispatch(actions);
             });
         }
@@ -1000,6 +1146,6 @@ fn write_probe() {
         return;
     };
     let e = rt().engine.lock().unwrap();
-    let data = serde_json::json!({"processId":std::process::id(),"permissions":platform::permissions(),"windows":e.snapshot.windows.iter().map(|w|serde_json::json!({"id":w.id,"pid":w.pid,"nativeId":w.native_id,"displayId":w.display_id,"desktopId":w.desktop_id,"currentDesktop":w.current_desktop,"minimized":w.minimized,"hidden":w.hidden})).collect::<Vec<_>>(),"displays":e.snapshot.displays,"focusedId":e.snapshot.focused_id,"sessionMode":e.session.mode,"sessionLayer":e.session.layer,"loading":e.session.loading,"desktops":e.snapshot.desktops,"sessionId":e.session.session_id,"selected":e.session.selected,"hints":e.session.windows.iter().map(|w|serde_json::json!({"id":w.window.id,"hint":w.hint})).collect::<Vec<_>>(),"warnings":e.snapshot.warnings});
+    let data = serde_json::json!({"processId":std::process::id(),"permissions":platform::permissions(),"windows":e.snapshot.windows.iter().map(|w|serde_json::json!({"id":w.id,"pid":w.pid,"nativeId":w.native_id,"displayId":w.display_id,"desktopId":w.desktop_id,"currentDesktop":w.current_desktop,"minimized":w.minimized,"hidden":w.hidden})).collect::<Vec<_>>(),"displays":e.snapshot.displays,"focusedId":e.snapshot.focused_id,"sessionMode":e.session.mode,"sessionLayer":e.session.layer,"loading":e.session.loading,"desktops":e.snapshot.desktops,"sessionId":e.session.session_id,"prefix":e.session.prefix,"resultIds":e.session.result_ids,"selected":e.session.selected,"hints":e.session.windows.iter().map(|w|serde_json::json!({"id":w.window.id,"hint":w.hint})).collect::<Vec<_>>(),"warnings":e.snapshot.warnings});
     let _ = std::fs::write(path, serde_json::to_vec_pretty(&data).unwrap());
 }

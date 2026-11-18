@@ -16,6 +16,7 @@ mod platform;
 mod plugin_install;
 mod plugin_manager;
 mod plugins;
+mod presentation;
 mod runtime;
 mod screen_buoy;
 mod search;
@@ -134,6 +135,8 @@ pub fn run() {
             runtime::get_settings,
             runtime::save_settings,
             runtime::get_session,
+            runtime::get_panel_presentation,
+            runtime::panel_ready,
             runtime::open_search,
             runtime::search,
             runtime::navigate,

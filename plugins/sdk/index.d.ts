@@ -4,7 +4,7 @@ export interface Manifest {
   name: string;
   version: string;
   appIds: string[];
-  capabilities?: ('thumbnails')[];
+  capabilities?: ('thumbnails' | 'search')[];
   description?: string;
   homepage?: string;
 }
@@ -20,6 +20,7 @@ export function startPlugin(options: {
   directory?: string;
   list(context: RequestContext): Promise<{contexts: Context[]}> | {contexts: Context[]};
   activate(target: Target, context: RequestContext): Promise<Target & {verified: true}> | (Target & {verified: true});
+  search?(request: {context: string; query: string}, context: RequestContext): Promise<Context> | Context;
   thumbnails?(request: ThumbnailRequest, context: RequestContext): Promise<ThumbnailReply> | ThumbnailReply;
   onError?(error: Error): void;
 }): Promise<{instance: string; manifest: Manifest; dispose(): Promise<void>}>;
